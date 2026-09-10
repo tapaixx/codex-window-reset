@@ -177,7 +177,10 @@ export function renderAccounts(container, accounts = [], options = {}) {
     const actionCheckbox = document.createElement('input');
     actionCheckbox.type = 'checkbox';
     actionCheckbox.checked = selectedKeys.has(key);
-    actionCheckbox.disabled = Boolean(account.unavailable || account.disabled);
+    // Host Unavailable is an explicit manual-probe override state, not a
+    // reason to remove the account from Action Selection. Disabled accounts
+    // remain excluded from manual actions.
+    actionCheckbox.disabled = Boolean(account.disabled);
     actionCheckbox.dataset.accountSelection = key;
     actionCheckbox.setAttribute('aria-label', `Select account ${maskIdentity(account.masked_identity, key)} for an action`);
     actionCheckbox.addEventListener('change', () => options.onSelectionChange?.(key, actionCheckbox.checked));

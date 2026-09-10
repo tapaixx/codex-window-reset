@@ -78,6 +78,41 @@ export function isResetQuotaEligible(account = {}, quota = {}, now = Date.now())
   return Number.isFinite(nowTime) && age >= 0 && age <= RESET_FRESHNESS_MS;
 }
 
+export function prepareProbeRequest({
+  accounts = [],
+  selectedAccountKeys = [],
+  quotaAcknowledged = false,
+  unavailableAcknowledged = false,
+} = {}) {
+  const keys = [...new Set((Array.isArray(selectedAccountKeys) ? selectedAccountKeys : [])
+    .map((key) => String(key || '').trim())
+    .filter(Boolean))];
+  if (!keys.length) return { ok: false, errorCode: 'selection_required', body: null };
+
+  const selectedAccounts = (Array.isArray(accounts) ? accounts : [])
+    .filter((account) => keys.includes(String(account?.account_key || '').trim()));
+  if (selectedAccounts.some((account) => account?.disabled)) {
+    return { ok: false, errorCode: 'account_disabled', body: null };
+  }
+  if (!quotaAcknowledged) {
+    return { ok: false, errorCode: 'quota_acknowledgement_required', body: null };
+  }
+
+  const hasUnavailable = selectedAccounts.some((account) => account?.unavailable);
+  if (hasUnavailable && !unavailableAcknowledged) {
+    return { ok: false, errorCode: 'unavailable_acknowledgement_required', body: null };
+  }
+  return {
+    ok: true,
+    errorCode: null,
+    body: {
+      account_keys: keys,
+      acknowledge_quota_effect: true,
+      allow_unavailable: hasUnavailable,
+    },
+  };
+}
+
 function setText(element, value) {
   if (element) element.textContent = String(value ?? '');
 }
@@ -144,6 +179,9 @@ function bootPanel() {
     feedback: node('feedback'),
     hostLogin: node('host-login'),
     runStatus: node('run-status'),
+    probeAcknowledgement: node('probe-acknowledgement'),
+    unavailableAcknowledgement: node('probe-unavailable-acknowledgement'),
+    unavailableAcknowledgementLabel: node('probe-unavailable-acknowledgement-label'),
     resetDialog: node('reset-dialog'),
     resetForm: node('reset-form'),
     resetAccount: node('reset-account'),
@@ -180,6 +218,20 @@ function bootPanel() {
     panels.forEach((panel) => { panel.hidden = panel.dataset.panel !== active; });
   }
 
+  function renderProbeAcknowledgements(state) {
+    const selected = new Set(selectedKeys(state));
+    const hasUnavailable = state.accounts.some((account) => selected.has(String(account?.account_key || '').trim()) && account?.unavailable && !account?.disabled);
+    if (elements.unavailableAcknowledgementLabel) elements.unavailableAcknowledgementLabel.hidden = !hasUnavailable;
+    if (elements.unavailableAcknowledgement) {
+      elements.unavailableAcknowledgement.disabled = !hasUnavailable;
+      // An override is scoped to the current unavailable selection. Do not
+      // let a prior override affect a later ordinary probe.
+      if (!hasUnavailable) elements.unavailableAcknowledgement.checked = false;
+      if (hasUnavailable) elements.unavailableAcknowledgement.setAttribute('aria-required', 'true');
+      else elements.unavailableAcknowledgement.removeAttribute('aria-required');
+    }
+  }
+
   function render(state, action = { type: 'initial' }) {
     const status = state.status || {};
     const run = state.currentRun ? { ...state.currentRun, ...status } : status;
@@ -194,6 +246,7 @@ function bootPanel() {
     setText(elements.selectionCount, `${state.selectedAccountKeys.length} selected`);
     setText(elements.runStatus, run.run_id ? `Run ${run.run_id}: ${run.run_completed || 0} of ${run.run_total || 0} complete.` : 'No operation is running.');
     setText(elements.feedback, state.feedback || '');
+    renderProbeAcknowledgements(state);
     if (elements.connection) {
       if (state.authRequired) {
         elements.connection.dataset.state = 'error';
@@ -300,23 +353,26 @@ function bootPanel() {
   }
 
   async function runProbe(button) {
-    const keys = selectedKeys(store.getState());
-    if (!keys.length) {
-      showAreaError('account-feedback', '请先选择至少一个账户。');
-      return;
-    }
-    if (!node('probe-acknowledgement')?.checked) {
-      showAreaError('account-feedback', '请先确认真实 Codex 请求可能消耗普通配额或开始 Short Window。');
-      return;
-    }
-    const selectedAccounts = store.getState().accounts.filter((account) => keys.includes(account.account_key));
-    if (selectedAccounts.some((account) => account.unavailable || account.disabled)) {
-      showAreaError('account-feedback', '不可用或已停用的账户不能执行健康探测。');
+    const state = store.getState();
+    const prepared = prepareProbeRequest({
+      accounts: state.accounts,
+      selectedAccountKeys: selectedKeys(state),
+      quotaAcknowledged: Boolean(elements.probeAcknowledgement?.checked),
+      unavailableAcknowledged: Boolean(elements.unavailableAcknowledgement?.checked),
+    });
+    if (!prepared.ok) {
+      const messages = {
+        selection_required: '请先选择至少一个账户。',
+        account_disabled: '已停用的账户不能执行健康探测。',
+        quota_acknowledgement_required: '请先确认真实 Codex 请求可能消耗普通配额或开始 Short Window。',
+        unavailable_acknowledgement_required: '所选账户包含不可用账户，请先明确授权覆盖宿主的 Unavailable 状态。',
+      };
+      showAreaError('account-feedback', messages[prepared.errorCode] || '请检查健康探测授权。');
       return;
     }
     await withButton(button, 'Starting...', async () => {
       try {
-        const value = await request('/probes', { method: 'POST', body: { account_keys: keys, acknowledge_quota_effect: true, allow_unavailable: false } });
+        const value = await request('/probes', { method: 'POST', body: prepared.body });
         store.dispatch({ type: 'run-started', value });
         dispatchFeedback(`Health probe run ${value?.run_id || 'started'} accepted.`);
         const status = await request('/status');

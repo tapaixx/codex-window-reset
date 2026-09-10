@@ -79,6 +79,10 @@
             <input id="probe-acknowledgement" type="checkbox">
             <span>I acknowledge the quota effect before a manual probe.</span>
           </label>
+          <label class="acknowledgement unavailable-acknowledgement" id="probe-unavailable-acknowledgement-label" for="probe-unavailable-acknowledgement" hidden>
+            <input id="probe-unavailable-acknowledgement" type="checkbox" disabled>
+            <span>I authorize overriding host Unavailable state for the selected account(s).</span>
+          </label>
           <div class="button-row">
             <button class="button button-secondary" type="button" data-action="refresh-quota">Refresh selected quota</button>
             <button class="button button-secondary" type="button" data-action="run-probe">Run health probe</button>
