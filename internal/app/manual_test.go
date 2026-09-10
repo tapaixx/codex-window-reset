@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -53,21 +54,36 @@ func (s *task7AccountService) Find(_ context.Context, key string) (accounts.Acco
 	return account, nil
 }
 
+func (s *task7AccountService) Set(account accounts.Account) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	account.Key = normalizeKey(account.Key)
+	s.accounts[account.Key] = account
+}
+
+func (s *task7AccountService) Remove(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.accounts, normalizeKey(key))
+}
+
 type task7Probe struct {
 	mu          sync.Mutex
 	active      int
 	max         int
 	calls       int
+	executed    []string
 	entered     chan struct{}
 	release     chan struct{}
 	releaseOnce sync.Once
 	result      domain.ProbeResult
 }
 
-func (p *task7Probe) Execute(ctx context.Context, _ accounts.Account, _ string, _ time.Duration) domain.ProbeResult {
+func (p *task7Probe) Execute(ctx context.Context, account accounts.Account, _ string, _ time.Duration) domain.ProbeResult {
 	p.mu.Lock()
 	p.active++
 	p.calls++
+	p.executed = append(p.executed, normalizeKey(account.Key))
 	if p.active > p.max {
 		p.max = p.active
 	}
@@ -106,6 +122,12 @@ func (p *task7Probe) Calls() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.calls
+}
+
+func (p *task7Probe) ExecutedKeys() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.executed...)
 }
 
 func (p *task7Probe) ReleaseAll() { p.releaseOnce.Do(func() { close(p.release) }) }
@@ -514,5 +536,98 @@ func TestRefreshQuotasKeepsPriorSnapshotWhenRefreshFails(t *testing.T) {
 	}
 	if views[1].RefreshErrorCode != domain.CodeQuotaRefreshFailed {
 		t.Fatalf("failed view = %#v", views[1])
+	}
+}
+
+func TestRefreshQuotasKeepsPriorSnapshotWhenAccountLookupFails(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+	prior := domain.UsageSnapshot{
+		AccountKey: "a",
+		CapturedAt: time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC),
+		Windows: []domain.UsageWindow{{
+			DurationMinutes:  300,
+			RemainingPercent: 45,
+			ResetAt:          time.Date(2026, 9, 9, 15, 0, 0, 0, time.UTC),
+			Short:            true,
+		}},
+	}
+	fx.quota.snapshots["a"] = prior
+	fx.accounts.Remove("a")
+
+	views, err := fx.runtime.RefreshQuotas(context.Background(), []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("views = %d, want 1", len(views))
+	}
+	if !reflect.DeepEqual(views[0].Snapshot, prior) {
+		t.Fatalf("prior snapshot lost: %#v, want %#v", views[0].Snapshot, prior)
+	}
+	if views[0].RefreshErrorCode != domain.CodeQuotaRefreshFailed {
+		t.Fatalf("failed view = %#v", views[0])
+	}
+}
+
+func TestManualProbeRechecksQueuedAccountEligibility(t *testing.T) {
+	tests := []struct {
+		name      string
+		allow     bool
+		mutated   func(accounts.Account) accounts.Account
+		errorCode domain.ErrorCode
+	}{
+		{
+			name: "disabled",
+			mutated: func(account accounts.Account) accounts.Account {
+				account.Disabled = true
+				return account
+			},
+			errorCode: domain.CodeAccountDisabled,
+		},
+		{
+			name: "unavailable without override",
+			mutated: func(account accounts.Account) accounts.Account {
+				account.Unavailable = true
+				return account
+			},
+			errorCode: domain.CodeAccountUnavailable,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			accountsList := task7Accounts(5)
+			fx := newTask7Fixture(t, accountsList...)
+			defer fx.runtime.Stop()
+			keys := make([]string, 0, len(accountsList))
+			for _, account := range accountsList {
+				keys = append(keys, account.Key)
+			}
+			runID, err := fx.runtime.StartManualProbes(context.Background(), keys, tc.allow)
+			if err != nil || runID == "" {
+				t.Fatalf("%q %v", runID, err)
+			}
+			for index := 0; index < 3; index++ {
+				select {
+				case <-fx.probes.entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("three probe workers did not start")
+				}
+			}
+
+			queued := tc.mutated(accountsList[3])
+			fx.accounts.Set(queued)
+			fx.runtime.mu.RLock()
+			run := fx.runtime.run
+			fx.runtime.mu.RUnlock()
+			fx.probes.ReleaseAll()
+			waitTask7Run(t, run)
+
+			for _, key := range fx.probes.ExecutedKeys() {
+				if key == queued.Key {
+					t.Fatalf("queued %s account was probed after becoming %s", queued.Key, tc.errorCode)
+				}
+			}
+		})
 	}
 }

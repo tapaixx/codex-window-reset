@@ -97,7 +97,7 @@ func (r *Runtime) StartManualProbes(ctx context.Context, keys []string, allowUna
 	r.wg.Add(1)
 	r.mu.Unlock()
 
-	go r.runManual(runCtx, run, selected)
+	go r.runManual(runCtx, run, selected, allowUnavailable)
 	return runID, nil
 }
 
@@ -175,7 +175,18 @@ func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.Sn
 func (r *Runtime) refreshQuotaOne(ctx context.Context, key string) domain.SnapshotView {
 	account, err := r.deps.Accounts.Find(ctx, key)
 	if err != nil {
-		return failedSnapshotView(key, err, r.now())
+		now := r.now()
+		if view, ok := r.deps.Quota.Get(key, now); ok {
+			if view.Snapshot.AccountKey == "" {
+				view.Snapshot.AccountKey = key
+			}
+			view.RefreshErrorCode = domain.CodeQuotaRefreshFailed
+			if view.LastAttemptAt.IsZero() {
+				view.LastAttemptAt = now.UTC()
+			}
+			return view
+		}
+		return failedSnapshotView(key, err, now)
 	}
 	account.Key = key
 	snapshot, refreshErr := r.refreshSnapshot(ctx, account)
@@ -222,7 +233,7 @@ func failedSnapshotView(key string, err error, now time.Time) domain.SnapshotVie
 	}
 }
 
-func (r *Runtime) runManual(ctx context.Context, run *runState, selected []accounts.Account) {
+func (r *Runtime) runManual(ctx context.Context, run *runState, selected []accounts.Account, allowUnavailable bool) {
 	defer r.wg.Done()
 	workers := len(selected)
 	if workers > 3 {
@@ -240,7 +251,7 @@ func (r *Runtime) runManual(ctx context.Context, run *runState, selected []accou
 		go func() {
 			defer workerWG.Done()
 			for account := range jobs {
-				r.executeManual(ctx, account)
+				r.executeManual(ctx, account, allowUnavailable)
 				r.completeOne(run)
 			}
 		}()
@@ -287,7 +298,23 @@ func (r *Runtime) finishRun(run *runState) {
 	r.mu.Unlock()
 }
 
-func (r *Runtime) executeManual(ctx context.Context, account accounts.Account) {
+func (r *Runtime) executeManual(ctx context.Context, account accounts.Account, allowUnavailable bool) {
+	current, err := r.deps.Accounts.Find(ctx, account.Key)
+	if err != nil {
+		r.recordManualEligibility(account, domain.CodeAccountUnavailable)
+		return
+	}
+	current.Key = normalizeKey(account.Key)
+	if current.Disabled {
+		r.recordManualEligibility(current, domain.CodeAccountDisabled)
+		return
+	}
+	if current.Unavailable && !allowUnavailable {
+		r.recordManualEligibility(current, domain.CodeAccountUnavailable)
+		return
+	}
+	account = current
+
 	if !r.acquireBusy(account.Key) {
 		record := operationBase(r, domain.TriggerHealthProbe, "", account)
 		record.RequestOutcome = domain.RequestResponseError
@@ -323,6 +350,15 @@ func (r *Runtime) executeManual(ctx context.Context, account accounts.Account) {
 	if record.RequestOutcome == domain.RequestSucceeded && record.WindowOutcome == domain.WindowUnverified {
 		record.ErrorCode = domain.CodeWindowUnverified
 	}
+	record.FinishedAt = r.now()
+	r.appendHistory(record)
+}
+
+func (r *Runtime) recordManualEligibility(account accounts.Account, code domain.ErrorCode) {
+	record := operationBase(r, domain.TriggerHealthProbe, "", account)
+	record.RequestOutcome = domain.RequestDisabled
+	record.WindowOutcome = domain.WindowNotObserved
+	record.ErrorCode = code
 	record.FinishedAt = r.now()
 	r.appendHistory(record)
 }

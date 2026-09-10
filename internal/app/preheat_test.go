@@ -68,6 +68,42 @@ func TestPreheatQuotaUnknownFailsOpenAndRecordsIndependentOutcomes(t *testing.T)
 	}
 }
 
+func TestFallbackDecisionDoesNotAuthorizeStaleOrUntimestampedSnapshot(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		capturedAt time.Time
+	}{
+		{name: "stale", capturedAt: now.Add(-6 * time.Minute)},
+		{name: "untimestamped", capturedAt: time.Time{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+			defer fx.runtime.Stop()
+			fx.quota.snapshots["a"] = domain.UsageSnapshot{
+				AccountKey: tc.name,
+				CapturedAt: tc.capturedAt,
+				Windows: []domain.UsageWindow{{
+					DurationMinutes:  300,
+					RemainingPercent: 80,
+					ResetAt:          now.Add(3 * time.Hour),
+					Short:            true,
+				}},
+			}
+			fx.probes.ReleaseAll()
+
+			record := fx.runtime.ExecutePreheat(context.Background(), domain.PlannedOccurrence{ID: "occ-" + tc.name, AccountKey: "a"})
+			if record.Decision != domain.DecisionProceed {
+				t.Fatalf("decision=%s, want %s", record.Decision, domain.DecisionProceed)
+			}
+			if got := fx.probes.Calls(); got != 1 {
+				t.Fatalf("probe calls=%d, want 1", got)
+			}
+		})
+	}
+}
+
 func TestPreheatCompensationOnlyForEligibleAutomaticFailures(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -9,6 +9,8 @@ import (
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 )
 
+const fallbackSnapshotStaleAfter = 5 * time.Minute
+
 // ExecutePreheat performs one scheduler-owned preheat operation.  The
 // scheduler-facing API intentionally returns a record rather than an error:
 // every attempted or skipped occurrence has one durable operation record,
@@ -163,11 +165,14 @@ func (r *Runtime) evaluateQuota(config domain.Config, key string, now time.Time,
 // test or embedding implementation exposes Refresh/Get but not Evaluate.
 func fallbackDecision(r *Runtime, config domain.Config, key string, now time.Time, refreshed *domain.UsageSnapshot, refreshErr error) domain.QuotaDecision {
 	var snapshot *domain.UsageSnapshot
+	var fresh bool
 	if refreshed != nil {
 		snapshot = refreshed
-	} else if view, ok := r.deps.Quota.Get(key, now); ok && view.RefreshErrorCode == "" && !view.Stale {
+		fresh = snapshotIsFresh(refreshed, now)
+	} else if view, ok := r.deps.Quota.Get(key, now); ok && view.RefreshErrorCode == "" && !view.Stale && snapshotIsFresh(&view.Snapshot, now) {
 		copy := view.Snapshot
 		snapshot = &copy
+		fresh = true
 	}
 	if refreshErr != nil || snapshot == nil {
 		if r.hasHold(key) {
@@ -185,12 +190,19 @@ func fallbackDecision(r *Runtime, config domain.Config, key string, now time.Tim
 		}
 	}
 	short := snapshot.Windows[shortIndex]
-	if short.RemainingPercent >= config.RemainingQuotaFloorPercent &&
+	if fresh && short.RemainingPercent >= config.RemainingQuotaFloorPercent &&
 		!short.ResetAt.IsZero() &&
 		short.ResetAt.Sub(now.UTC()) >= time.Duration(config.RemainingWindowFloorMinutes)*time.Minute {
 		return domain.DecisionSufficientWindow
 	}
 	return domain.DecisionProceed
+}
+
+func snapshotIsFresh(snapshot *domain.UsageSnapshot, now time.Time) bool {
+	if snapshot == nil || snapshot.CapturedAt.IsZero() {
+		return false
+	}
+	return now.UTC().Sub(snapshot.CapturedAt.UTC()) < fallbackSnapshotStaleAfter
 }
 
 func shortestWindowIndex(windows []domain.UsageWindow) (int, bool) {
