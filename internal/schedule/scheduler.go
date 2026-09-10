@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	schedulerHorizonDays = 7
-	schedulerRetryDelay  = time.Second
-	midnightTimerID      = "@schedule-midnight"
-	compensationPrefix   = "@compensation/"
+	schedulerHorizonDays  = 7
+	schedulerRetryDelay   = time.Second
+	midnightTimerID       = "@schedule-midnight"
+	reconcileRetryTimerID = "@schedule-reconcile-retry"
+	compensationPrefix    = "@compensation/"
 )
 
 // RuntimeStateRepository is the durable state boundary shared by the
@@ -90,7 +91,17 @@ type Scheduler struct {
 	timers          map[string]domain.Timer
 	timerDue        map[string]time.Time
 	timerGeneration map[string]uint64
+	pendingTerminal map[string]pendingTerminal
 	config          domain.Config
+}
+
+// pendingTerminal retains the result of an executor call when the terminal
+// state write fails. It lets a later timer retry only the durable write; the
+// external request is never repeated merely because persistence was
+// temporarily unavailable.
+type pendingTerminal struct {
+	kind   schedulerCommandKind
+	status domain.OccurrenceStatus
 }
 
 type schedulerCommand struct {
@@ -107,6 +118,7 @@ const (
 	commandReconcile schedulerCommandKind = iota + 1
 	commandOccurrence
 	commandCompensation
+	commandReconcileRetry
 	commandMidnight
 )
 
@@ -125,6 +137,7 @@ func NewScheduler(clock domain.Clock, planner PlanSource, states RuntimeStateRep
 		timers:          make(map[string]domain.Timer),
 		timerDue:        make(map[string]time.Time),
 		timerGeneration: make(map[string]uint64),
+		pendingTerminal: make(map[string]pendingTerminal),
 	}
 }
 
@@ -276,6 +289,13 @@ func (s *Scheduler) handle(command schedulerCommand) {
 		err = s.handleOccurrence(command.id, command.generation)
 	case commandCompensation:
 		err = s.handleCompensation(command.id, command.generation)
+	case commandReconcileRetry:
+		if s.consumeTimer(reconcileRetryTimerID, command.generation) {
+			err = s.reconcileOwned(s.config)
+			if err != nil {
+				s.scheduleReconcileRetry(s.clock.Now().UTC())
+			}
+		}
 	case commandMidnight:
 		if s.consumeTimer(midnightTimerID, command.generation) {
 			err = s.reconcileOwned(s.config)
@@ -286,6 +306,7 @@ func (s *Scheduler) handle(command schedulerCommand) {
 				if retryErr := s.scheduleMidnight(s.config); retryErr != nil {
 					err = errors.Join(err, retryErr)
 				}
+				s.scheduleReconcileRetry(s.clock.Now().UTC())
 			}
 		}
 	}
@@ -452,6 +473,25 @@ func (s *Scheduler) reconcileTimers(state domain.RuntimeState, now time.Time) {
 					s.enqueue(commandOccurrence, id, generation)
 				})
 			}
+		case domain.OccurrenceRunning:
+			// A running occurrence can only remain in this process after its
+			// terminal state write failed. Keep a timer-owned recovery attempt
+			// for that in-memory terminal result; a restart marks running work
+			// missed before reconciliation, so it cannot be retried blindly.
+			pending, exists := s.pendingTerminal[id]
+			if !exists {
+				continue
+			}
+			timerID, kind := id, commandOccurrence
+			if pending.kind == commandCompensation {
+				timerID, kind = compensationTimerID(id), commandCompensation
+			}
+			due, scheduled := s.timerDue[timerID]
+			if !scheduled {
+				s.retryTimer(timerID, kind, now)
+				due = s.timerDue[timerID]
+			}
+			active[timerID] = due
 		case domain.OccurrenceFailed:
 			if occurrence.CompensationAttempted || occurrence.CompensationDueAt.IsZero() {
 				continue
@@ -467,7 +507,7 @@ func (s *Scheduler) reconcileTimers(state domain.RuntimeState, now time.Time) {
 		}
 	}
 	for id, timer := range s.timers {
-		if id == midnightTimerID {
+		if id == midnightTimerID || id == reconcileRetryTimerID {
 			continue
 		}
 		due, exists := active[id]
@@ -531,11 +571,90 @@ func (s *Scheduler) retryTimer(id string, kind schedulerCommandKind, now time.Ti
 	})
 }
 
+func (s *Scheduler) scheduleReconcileRetry(now time.Time) {
+	if s.isStopped() {
+		return
+	}
+	if due, exists := s.timerDue[reconcileRetryTimerID]; exists && due.After(now.UTC()) {
+		return
+	}
+	due := now.UTC().Add(schedulerRetryDelay)
+	s.replaceTimer(reconcileRetryTimerID, due, now, func(generation uint64) {
+		s.enqueue(commandReconcileRetry, "", generation)
+	})
+}
+
+func (s *Scheduler) pendingTimer(id string) bool {
+	if id == reconcileRetryTimerID || id == midnightTimerID {
+		return true
+	}
+	for occurrenceID, pending := range s.pendingTerminal {
+		if pending.kind == commandCompensation && compensationTimerID(occurrenceID) == id {
+			return true
+		}
+		if pending.kind == commandOccurrence && occurrenceID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scheduler) persistTerminal(id string, pending pendingTerminal) error {
+	if s.states == nil {
+		return errors.New("runtime state repository is required")
+	}
+	return s.states.Update(func(state *domain.RuntimeState) error {
+		ensureRuntimeStateMaps(state)
+		entry, exists := state.Occurrences[id]
+		if !exists {
+			return nil
+		}
+		entry.Status = pending.status
+		if pending.kind == commandCompensation {
+			entry.CompensationDueAt = time.Time{}
+			entry.CompensationAttempted = true
+			delete(state.NextRuns, id)
+		} else {
+			if pending.status != domain.OccurrenceFailed {
+				entry.CompensationDueAt = time.Time{}
+				entry.CompensationAttempted = false
+			}
+			if pending.status == domain.OccurrenceFailed && !entry.CompensationAttempted && !entry.CompensationDueAt.IsZero() {
+				state.NextRuns[id] = entry.CompensationDueAt.UTC()
+			} else {
+				delete(state.NextRuns, id)
+			}
+		}
+		state.Occurrences[id] = entry
+		return nil
+	})
+}
+
+func (s *Scheduler) reconcileAfterCallback(kind, id string) error {
+	// Re-read the latest config and advance the horizon after every callback.
+	err := s.reconcileOwned(s.config)
+	if err == nil {
+		return nil
+	}
+	// A callback consumed its ownership timer before this attempt. Keep a
+	// separate retry so planner/state failures cannot strand horizon updates.
+	s.scheduleReconcileRetry(s.clock.Now().UTC())
+	return fmt.Errorf("reconcile after %s %q: %w", kind, id, err)
+}
+
 func (s *Scheduler) handleOccurrence(id string, generation uint64) error {
 	if !s.consumeTimer(id, generation) || s.states == nil || s.exec == nil {
 		return nil
 	}
 	now := s.clock.Now().UTC()
+	if pending, exists := s.pendingTerminal[id]; exists && pending.kind == commandOccurrence {
+		if err := s.persistTerminal(id, pending); err != nil {
+			s.retryTimer(id, commandOccurrence, now)
+			return fmt.Errorf("save terminal occurrence %q: %w", id, err)
+		}
+		delete(s.pendingTerminal, id)
+		return s.reconcileAfterCallback("occurrence", id)
+	}
 	var occurrence domain.PlannedOccurrence
 	var claimed bool
 	err := s.states.Update(func(state *domain.RuntimeState) error {
@@ -566,34 +685,16 @@ func (s *Scheduler) handleOccurrence(id string, generation uint64) error {
 	if !executing {
 		return nil
 	}
-	status := statusForRecord(record)
-	terminalErr := s.states.Update(func(state *domain.RuntimeState) error {
-		ensureRuntimeStateMaps(state)
-		entry, exists := state.Occurrences[id]
-		if !exists {
-			return nil
-		}
-		entry.Status = status
-		if status != domain.OccurrenceFailed {
-			entry.CompensationDueAt = time.Time{}
-			entry.CompensationAttempted = false
-		}
-		if status == domain.OccurrenceFailed && !entry.CompensationAttempted && !entry.CompensationDueAt.IsZero() {
-			state.NextRuns[id] = entry.CompensationDueAt.UTC()
-		} else {
-			delete(state.NextRuns, id)
-		}
-		state.Occurrences[id] = entry
-		return nil
-	})
+	pending := pendingTerminal{kind: commandOccurrence, status: statusForRecord(record)}
+	terminalErr := s.persistTerminal(id, pending)
 	if terminalErr != nil {
+		s.pendingTerminal[id] = pending
+		s.retryTimer(id, commandOccurrence, now)
 		terminalErr = fmt.Errorf("save terminal occurrence %q: %w", id, terminalErr)
+	} else {
+		delete(s.pendingTerminal, id)
 	}
-	// Re-read the latest config and advance the horizon after every callback.
-	reconcileErr := s.reconcileOwned(s.config)
-	if reconcileErr != nil {
-		reconcileErr = fmt.Errorf("reconcile after occurrence %q: %w", id, reconcileErr)
-	}
+	reconcileErr := s.reconcileAfterCallback("occurrence", id)
 	return errors.Join(terminalErr, reconcileErr)
 }
 
@@ -602,9 +703,18 @@ func (s *Scheduler) handleCompensation(id string, generation uint64) error {
 	if !s.consumeTimer(timerID, generation) || s.states == nil || s.exec == nil {
 		return nil
 	}
+	now := s.clock.Now().UTC()
+	if pending, exists := s.pendingTerminal[id]; exists && pending.kind == commandCompensation {
+		if err := s.persistTerminal(id, pending); err != nil {
+			s.retryTimer(timerID, commandCompensation, now)
+			return fmt.Errorf("save compensation occurrence %q: %w", id, err)
+		}
+		delete(s.pendingTerminal, id)
+		return s.reconcileAfterCallback("compensation", id)
+	}
 	state, err := s.states.Load()
 	if err != nil {
-		s.retryTimer(timerID, commandCompensation, s.clock.Now().UTC())
+		s.retryTimer(timerID, commandCompensation, now)
 		return fmt.Errorf("load compensation occurrence %q: %w", id, err)
 	}
 	entry, exists := state.Occurrences[id]
@@ -652,7 +762,7 @@ func (s *Scheduler) handleCompensation(id string, generation uint64) error {
 		return nil
 	}
 	if !eligible {
-		return s.reconcileOwned(s.config)
+		return s.reconcileAfterCallback("compensation", id)
 	}
 	record, executing := s.execute(func() domain.OperationRecord {
 		if compensation, ok := s.exec.(CompensationExecutor); ok {
@@ -665,26 +775,16 @@ func (s *Scheduler) handleCompensation(id string, generation uint64) error {
 	}
 	// The compensation is one-shot. The executor may have observed another
 	// transient failure and written a new due time; clear it unconditionally.
-	terminalErr := s.states.Update(func(state *domain.RuntimeState) error {
-		ensureRuntimeStateMaps(state)
-		entry, exists := state.Occurrences[id]
-		if !exists {
-			return nil
-		}
-		entry.Status = statusForRecord(record)
-		entry.CompensationDueAt = time.Time{}
-		entry.CompensationAttempted = true
-		delete(state.NextRuns, id)
-		state.Occurrences[id] = entry
-		return nil
-	})
+	pending := pendingTerminal{kind: commandCompensation, status: statusForRecord(record)}
+	terminalErr := s.persistTerminal(id, pending)
 	if terminalErr != nil {
+		s.pendingTerminal[id] = pending
+		s.retryTimer(timerID, commandCompensation, s.clock.Now().UTC())
 		terminalErr = fmt.Errorf("save compensation occurrence %q: %w", id, terminalErr)
+	} else {
+		delete(s.pendingTerminal, id)
 	}
-	reconcileErr := s.reconcileOwned(s.config)
-	if reconcileErr != nil {
-		reconcileErr = fmt.Errorf("reconcile after compensation %q: %w", id, reconcileErr)
-	}
+	reconcileErr := s.reconcileAfterCallback("compensation", id)
 	return errors.Join(terminalErr, reconcileErr)
 }
 
@@ -714,7 +814,7 @@ func (s *Scheduler) stopTimers() {
 
 func (s *Scheduler) cancelOccurrenceTimers() {
 	for id, timer := range s.timers {
-		if id == midnightTimerID {
+		if id == midnightTimerID || id == reconcileRetryTimerID || s.pendingTimer(id) {
 			continue
 		}
 		s.stopTimer(id, timer)

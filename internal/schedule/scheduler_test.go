@@ -172,6 +172,7 @@ type schedulerTestPlanner struct {
 	mu           sync.Mutex
 	plans        map[string][]domain.PlannedOccurrence
 	errors       map[string]error
+	onceErrors   map[string][]error
 	calls        int
 	blockedDate  string
 	blocked      chan struct{}
@@ -184,6 +185,10 @@ func (p *schedulerTestPlanner) PlanDay(_ domain.Config, date time.Time) ([]domai
 	dateKey := date.Format("2006-01-02")
 	plans := append([]domain.PlannedOccurrence(nil), p.plans[dateKey]...)
 	err := p.errors[dateKey]
+	if queued := p.onceErrors[dateKey]; len(queued) > 0 {
+		err = queued[0]
+		p.onceErrors[dateKey] = queued[1:]
+	}
 	blocked := p.blockedDate == dateKey
 	entered, release := p.blocked, p.blockRelease
 	p.mu.Unlock()
@@ -199,6 +204,12 @@ func (p *schedulerTestPlanner) PlanDay(_ domain.Config, date time.Time) ([]domai
 		}
 	}
 	return plans, err
+}
+
+func (p *schedulerTestPlanner) FailNext(date string, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onceErrors[date] = append(p.onceErrors[date], err)
 }
 
 type schedulerTestExecutor struct {
@@ -484,6 +495,202 @@ func TestSchedulerReportsOccurrencePersistenceAndReconcileFailures(t *testing.T)
 	})
 }
 
+func TestTerminalPersistenceFailureRearmsAndRetriesTerminalSave(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	occurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Minute), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
+	}
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+	fx.executor.returnGate = make(chan struct{})
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fx.clock.Advance(time.Minute)
+	select {
+	case <-fx.executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("occurrence did not claim")
+	}
+	fx.states.FailNextUpdate(errors.New("terminal persistence failed"))
+	close(fx.executor.returnGate)
+	waitForSchedulerError(t, fx.executor)
+
+	retryDue := now.Add(time.Minute).Add(schedulerRetryDelay)
+	waitForClockTimer(t, fx.clock, retryDue)
+	if got := fx.states.saved().Occurrences[occurrence.ID].Status; got != domain.OccurrenceRunning {
+		t.Fatalf("status after terminal save failure=%s, want running until retry", got)
+	}
+	if got := len(fx.executor.Calls()); got != 1 {
+		t.Fatalf("executor calls after terminal save failure=%d, want 1", got)
+	}
+
+	fx.clock.Advance(schedulerRetryDelay)
+	deadline := time.After(time.Second)
+	for {
+		state := fx.states.saved().Occurrences[occurrence.ID]
+		if state.Status == domain.OccurrenceSucceeded {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("terminal save was not recovered: %#v", state)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if got := len(fx.executor.Calls()); got != 1 {
+		t.Fatalf("executor calls after terminal save retry=%d, want 1", got)
+	}
+}
+
+func TestClaimPersistenceFailureRearmsAndRetriesClaim(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	occurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Minute), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
+	}
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fx.states.FailNextUpdate(errors.New("claim persistence failed"))
+	fx.clock.Advance(time.Minute)
+	waitForSchedulerError(t, fx.executor)
+
+	retryDue := now.Add(time.Minute).Add(schedulerRetryDelay)
+	waitForClockTimer(t, fx.clock, retryDue)
+	fx.clock.Advance(schedulerRetryDelay)
+	t.Logf("after retry advance: calls=%#v state=%#v now=%s", fx.executor.Calls(), fx.states.saved().Occurrences[occurrence.ID], fx.clock.Now())
+	waitForExecutorCalls(t, fx.executor, 1)
+	t.Logf("after wait: calls=%#v state=%#v now=%s", fx.executor.Calls(), fx.states.saved().Occurrences[occurrence.ID], fx.clock.Now())
+	state := fx.states.saved().Occurrences[occurrence.ID]
+	if state.Status != domain.OccurrenceSucceeded {
+		t.Fatalf("state after claim retry=%#v, want succeeded", state)
+	}
+}
+
+func TestCompensationTerminalPersistenceFailureRearmsAndRetriesTerminalSave(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	occurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Minute), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
+	}
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+	fx.executor.results = []domain.OperationRecord{
+		{RequestOutcome: domain.RequestNetworkError},
+		{RequestOutcome: domain.RequestSucceeded},
+	}
+	fx.executor.onCall = func(value domain.PlannedOccurrence) {
+		if len(fx.executor.Calls()) == 1 {
+			_ = fx.states.Update(func(state *domain.RuntimeState) error {
+				entry := state.Occurrences[value.ID]
+				entry.CompensationDueAt = fx.clock.Now().Add(time.Minute)
+				state.Occurrences[value.ID] = entry
+				return nil
+			})
+		} else if len(fx.executor.Calls()) == 2 {
+			fx.states.FailNextUpdate(errors.New("compensation terminal persistence failed"))
+		}
+	}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fx.clock.Advance(time.Minute)
+	waitForExecutorCalls(t, fx.executor, 1)
+	due := waitForCompensationSchedule(t, fx.states, occurrence.ID)
+	waitForClockTimer(t, fx.clock, due)
+
+	fx.clock.Advance(time.Minute)
+	waitForSchedulerError(t, fx.executor)
+	if got := fx.states.saved().Occurrences[occurrence.ID].Status; got != domain.OccurrenceRunning {
+		t.Fatalf("status after compensation terminal save failure=%s, want running until retry", got)
+	}
+	if got := len(fx.executor.Calls()); got != 2 {
+		t.Fatalf("executor calls after compensation terminal save failure=%d, want 2", got)
+	}
+
+	retryDue := due.Add(schedulerRetryDelay)
+	waitForClockTimer(t, fx.clock, retryDue)
+	fx.clock.Advance(schedulerRetryDelay)
+	deadline := time.After(time.Second)
+	for {
+		state := fx.states.saved().Occurrences[occurrence.ID]
+		if state.Status == domain.OccurrenceSucceeded && state.CompensationAttempted && state.CompensationDueAt.IsZero() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("compensation terminal save was not recovered: %#v", state)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if got := len(fx.executor.Calls()); got != 2 {
+		t.Fatalf("executor calls after compensation terminal save retry=%d, want 2", got)
+	}
+}
+
+func TestPostReconcileFailureRearmsReconciliation(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	occurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Minute), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
+	}
+	newOccurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p1/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 1,
+		PlannedAt: now.Add(2 * time.Hour), WindowStart: now.Add(time.Hour), WindowEnd: now.Add(3 * time.Hour),
+	}
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	fx.planner.mu.Lock()
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence, newOccurrence}
+	fx.planner.mu.Unlock()
+	fx.planner.FailNext(occurrence.LocalDate, errors.New("post-reconcile failed"))
+
+	fx.clock.Advance(time.Minute)
+	select {
+	case <-fx.executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("occurrence did not execute")
+	}
+	waitForSchedulerError(t, fx.executor)
+	if _, exists := fx.states.saved().Occurrences[newOccurrence.ID]; exists {
+		t.Fatalf("new occurrence persisted despite failed reconciliation: %#v", fx.states.saved().Occurrences[newOccurrence.ID])
+	}
+
+	retryDue := now.Add(time.Minute).Add(schedulerRetryDelay)
+	waitForClockTimer(t, fx.clock, retryDue)
+	fx.clock.Advance(schedulerRetryDelay)
+	deadline := time.After(time.Second)
+	for {
+		if _, exists := fx.states.saved().Occurrences[newOccurrence.ID]; exists {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("reconciliation was not recovered: %#v", fx.states.saved())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestSchedulerReportsCompensationLoadFailure(t *testing.T) {
 	now := schedulerInstant("2026-09-09T06:30:00Z")
 	id := "2026-09-09/p0/a"
@@ -749,8 +956,9 @@ func newSchedulerFixture(t *testing.T, now time.Time, state domain.RuntimeState)
 	t.Helper()
 	clock := newSchedulerTestClock(now)
 	planner := &schedulerTestPlanner{
-		plans:  make(map[string][]domain.PlannedOccurrence),
-		errors: make(map[string]error),
+		plans:      make(map[string][]domain.PlannedOccurrence),
+		errors:     make(map[string]error),
+		onceErrors: make(map[string][]error),
 	}
 	states := &schedulerTestStateRepository{state: cloneSchedulerState(state)}
 	executor := &schedulerTestExecutor{entered: make(chan struct{}, 8), allowCompensation: true}
@@ -780,6 +988,19 @@ func waitForCompensationSchedule(t *testing.T, states *schedulerTestStateReposit
 		select {
 		case <-deadline:
 			t.Fatalf("compensation was not scheduled: %#v", state.Occurrences[id])
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func waitForExecutorCalls(t *testing.T, executor *schedulerTestExecutor, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for len(executor.Calls()) < want {
+		select {
+		case <-deadline:
+			t.Fatalf("executor calls=%d, want at least %d", len(executor.Calls()), want)
 		default:
 			time.Sleep(time.Millisecond)
 		}
