@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { syncHostTheme } from '../modules/main.js';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
+const repositoryRoot = resolve(new URL('../..', import.meta.url).pathname);
+const execFileAsync = promisify(execFile);
 const productionFiles = [
   'panel.html',
   'styles.css',
@@ -77,6 +81,8 @@ test('module exports and design tokens stay unique and exact', async () => {
   })) assert.match(css, new RegExp(`--${name}\\s*:\\s*${value.replace('#', '\\#')}`));
   assert.match(css, /max-width\s*:\s*767px/);
   assert.match(css, /prefers-reduced-motion\s*:\s*reduce/);
+  assert.match(css, /:focus-visible\s*\{/);
+  assert.match(css, /button, input, select, textarea\s*\{[^{}]*min-height:\s*44px/);
 });
 
 function contrastRatio(foreground, background) {
@@ -107,4 +113,15 @@ test('theme synchronization reads a parent dark signal without polling', () => {
   const parentRoot = makeRoot('dark');
   syncHostTheme({ root: panelRoot, parentRoot, observe: false });
   assert.equal(panelRoot.dataset.theme, 'dark');
+});
+
+test('production web modules use no unapproved dynamic imports', async () => {
+  const sources = await Promise.all(productionFiles.map(readProduction));
+  assert.equal(sources.some((source) => /\bimport\s*\(/u.test(source)), false);
+});
+
+test('the disposable Task 11 report is no longer tracked', async () => {
+  const report = '.superpowers/sdd/2026-09-09-codex-window-reset/task-11-report.md';
+  const { stdout } = await execFileAsync('git', ['ls-files', '--', report], { cwd: repositoryRoot });
+  assert.equal(stdout.trim(), '');
 });

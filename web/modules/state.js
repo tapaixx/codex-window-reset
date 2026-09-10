@@ -74,8 +74,11 @@ export function createStore(initialState = {}) {
 
 export function reduceState(state, action) {
   switch (action.type) {
-    case 'status-loaded':
-      return { ...state, status: clone(action.value || {}), loading: false };
+    case 'status-loaded': {
+      const value = clone(action.value || {});
+      const currentRun = state.currentRun ? { ...state.currentRun, ...value } : state.currentRun;
+      return { ...state, status: value, currentRun, loading: false };
+    }
     case 'accounts-loaded':
       return { ...state, accounts: clone(action.value || []), loading: false };
     case 'schedule-loaded': {
@@ -121,6 +124,21 @@ export function reduceState(state, action) {
       const value = clone(action.value || []);
       const merged = { ...state.quotaByAccount, ...quotaIndex(value) };
       return { ...state, quota: Object.values(merged), quotaByAccount: merged, quotaRefresh: { loading: false, keys: [] }, lastError: null };
+    }
+    case 'quota-refresh-failed': {
+      const errorCode = String(action.error || 'quota_refresh_failed');
+      const failedKeys = uniqueKeys(action.keys);
+      const marked = { ...state.quotaByAccount };
+      for (const key of failedKeys) {
+        if (marked[key]) marked[key] = { ...marked[key], refresh_error_code: errorCode };
+      }
+      return {
+        ...state,
+        quota: Object.values(marked),
+        quotaByAccount: marked,
+        quotaRefresh: { loading: false, keys: [] },
+        lastError: errorCode,
+      };
     }
     case 'run-started':
       return { ...state, currentRun: { ...(action.value || {}), loading: true }, lastError: null };

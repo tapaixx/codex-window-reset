@@ -9,6 +9,16 @@ const NUMBER_FIELDS = new Set([
   'schema_version', 'revision',
 ]);
 
+const CONFIG_KEYS = [
+  'schema_version', 'revision', 'enabled', 'timezone', 'weekdays', 'work_periods',
+  'preheat_lead_minutes', 'preheat_span_minutes', 'productivity_minutes',
+  'remaining_quota_floor_percent', 'remaining_window_floor_minutes',
+  'long_window_floor_percent', 'blackout_periods', 'probe_model',
+  'probe_timeout_seconds', 'scheduled_account_keys',
+];
+const CONFIG_KEY_SET = new Set(CONFIG_KEYS);
+const PERIOD_INPUT_NAME = /^(?:work_periods|blackout_periods)\[\d+\]\.(?:start|end)$/u;
+
 function node(tag, text = '', className = '') {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -112,6 +122,24 @@ function readPeriods(list) {
     const inputs = row.querySelectorAll('input');
     return { start: inputs[0]?.value || '', end: inputs[1]?.value || '' };
   }).filter((period) => period.start || period.end);
+}
+
+function normalizePeriods(periods) {
+  return (Array.isArray(periods) ? periods : [])
+    .map((period) => ({ start: String(period?.start || ''), end: String(period?.end || '') }))
+    .filter((period) => period.start || period.end);
+}
+
+export function serializeScheduleDraft(input = {}) {
+  const draft = {};
+  for (const key of CONFIG_KEYS) {
+    if (key === 'work_periods' || key === 'blackout_periods') {
+      draft[key] = normalizePeriods(input[key]);
+    } else if (Object.hasOwn(input, key)) {
+      draft[key] = input[key];
+    }
+  }
+  return draft;
 }
 
 function attachChange(input, name, onChange, container) {
@@ -219,9 +247,10 @@ export function renderSchedule(container, schedule = {}, onChange = () => {}) {
 }
 
 export function readScheduleDraft(container, original = {}) {
-  const draft = { ...original };
+  const draft = serializeScheduleDraft(original);
   for (const input of container.querySelectorAll('[data-config-field]')) {
     const name = input.name;
+    if (!CONFIG_KEY_SET.has(name) || PERIOD_INPUT_NAME.test(name)) continue;
     if (name === 'scheduled_account_keys') {
       draft[name] = input.value.split(',').map((key) => key.trim()).filter(Boolean);
     } else if (input.type === 'checkbox') {
@@ -235,7 +264,7 @@ export function readScheduleDraft(container, original = {}) {
   draft.weekdays = [...container.querySelectorAll('input[name="weekdays"]:checked')].map((input) => Number(input.value));
   draft.work_periods = readPeriods(container.querySelector('[data-period-kind="work_periods"]'));
   draft.blackout_periods = readPeriods(container.querySelector('[data-period-kind="blackout_periods"]'));
-  return draft;
+  return serializeScheduleDraft(draft);
 }
 
 export function validateScheduleDraft(draft = {}) {

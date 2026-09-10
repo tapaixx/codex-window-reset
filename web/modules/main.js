@@ -67,6 +67,17 @@ function earliestNextRun(nextRuns = {}) {
   return values[0] || null;
 }
 
+const RESET_FRESHNESS_MS = 5 * 60 * 1000;
+
+export function isResetQuotaEligible(account = {}, quota = {}, now = Date.now()) {
+  const capturedAt = Date.parse(quota?.snapshot?.captured_at || '');
+  const nowTime = now instanceof Date ? now.getTime() : Number(now);
+  if (account?.unavailable || account?.disabled || quota?.refresh_error_code || quota?.stale) return false;
+  if (!quota?.snapshot?.reset_info_complete || !Number.isFinite(capturedAt)) return false;
+  const age = nowTime - capturedAt;
+  return Number.isFinite(nowTime) && age >= 0 && age <= RESET_FRESHNESS_MS;
+}
+
 function setText(element, value) {
   if (element) element.textContent = String(value ?? '');
 }
@@ -171,7 +182,7 @@ function bootPanel() {
 
   function render(state, action = { type: 'initial' }) {
     const status = state.status || {};
-    const run = state.currentRun || status;
+    const run = state.currentRun ? { ...state.currentRun, ...status } : status;
     const freshCount = state.quota.filter((item) => !item.stale).length;
     const next = earliestNextRun(status.next_runs);
     renderCard(elements.summaryCards.schedule, status.enabled ? 'Enabled' : 'Paused', status.store_error_code ? 'Store error' : 'Automatic preheat');
@@ -199,9 +210,10 @@ function bootPanel() {
     const resetButton = document.querySelector('[data-action="open-reset"]');
     const selected = selectedKeys(state);
     const selectedQuota = selected.length === 1 ? state.quotaByAccount[selected[0]] : null;
-    if (resetButton) resetButton.disabled = selected.length !== 1 || !selectedQuota || Boolean(selectedQuota.stale) || !selectedQuota.snapshot?.reset_info_complete;
+    const selectedAccount = selected.length === 1 ? state.accounts.find((account) => account.account_key === selected[0]) : null;
+    if (resetButton) resetButton.disabled = selected.length !== 1 || !isResetQuotaEligible(selectedAccount, selectedQuota);
 
-    const renderAccountActions = new Set(['initial', 'accounts-loaded', 'schedule-loaded', 'schedule-saved', 'restore-schedule', 'quota-refreshed', 'identity-revealed', 'history-loaded']);
+    const renderAccountActions = new Set(['initial', 'accounts-loaded', 'schedule-loaded', 'schedule-saved', 'restore-schedule', 'quota-refreshed', 'quota-refresh-failed', 'identity-revealed', 'history-loaded']);
     if (renderAccountActions.has(action.type)) {
       renderAccounts(elements.accounts, state.accounts, {
         scheduledAccountKeys: state.draftSchedule?.scheduled_account_keys,
@@ -220,8 +232,8 @@ function bootPanel() {
       renderSchedule(elements.schedule, state.draftSchedule, (name, value) => store.dispatch({ type: 'edit-schedule', patch: { [name]: value } }));
       lastRenderedSchedule = true;
     }
-    if (elements.simulation && (!lastRenderedSimulation || action.type === 'simulation-loaded' || action.type === 'quota-refreshed')) {
-      renderSimulation(elements.simulation, state.simulation, state.quota);
+    if (elements.simulation && (!lastRenderedSimulation || action.type === 'simulation-loaded' || action.type === 'quota-refreshed' || action.type === 'quota-refresh-failed')) {
+      renderSimulation(elements.simulation, state.simulation, state.quota, state.draftSchedule?.timezone || 'Asia/Shanghai');
       lastRenderedSimulation = true;
     }
     if (elements.history && (!lastRenderedHistory || action.type === 'history-loaded')) {
@@ -282,7 +294,7 @@ function bootPanel() {
         dispatchFeedback('Quota snapshots refreshed.');
       } catch (error) {
         dispatchError('account-feedback', error);
-        store.dispatch({ type: 'quota-refreshed', value: [] });
+        store.dispatch({ type: 'quota-refresh-failed', keys, error: error?.code || 'quota_refresh_failed' });
       }
     });
   }
@@ -295,6 +307,11 @@ function bootPanel() {
     }
     if (!node('probe-acknowledgement')?.checked) {
       showAreaError('account-feedback', '请先确认真实 Codex 请求可能消耗普通配额或开始 Short Window。');
+      return;
+    }
+    const selectedAccounts = store.getState().accounts.filter((account) => keys.includes(account.account_key));
+    if (selectedAccounts.some((account) => account.unavailable || account.disabled)) {
+      showAreaError('account-feedback', '不可用或已停用的账户不能执行健康探测。');
       return;
     }
     await withButton(button, 'Starting...', async () => {
@@ -394,13 +411,15 @@ function bootPanel() {
   }
 
   function openReset() {
-    const keys = selectedKeys(store.getState());
+    const state = store.getState();
+    const keys = selectedKeys(state);
     if (keys.length !== 1) {
       showAreaError('account-feedback', '重置操作必须且只能选择一个账户。');
       return;
     }
-    const quota = store.getState().quotaByAccount[keys[0]];
-    if (!quota || quota.stale || !quota.snapshot?.reset_info_complete) {
+    const account = state.accounts.find((item) => item.account_key === keys[0]);
+    const quota = state.quotaByAccount[keys[0]];
+    if (!isResetQuotaEligible(account, quota)) {
       showAreaError('account-feedback', '请先对该账户执行一次成功的当前配额刷新。');
       return;
     }

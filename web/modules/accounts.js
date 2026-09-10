@@ -35,6 +35,11 @@ function actionButton(label, key, action, pressed = false) {
   return button;
 }
 
+export function bindAccountRevealControl(button, accountKey, onReveal) {
+  button.addEventListener('click', () => onReveal?.(accountKey));
+  return button;
+}
+
 function maskIdentity(value, fallback) {
   const text = String(value || fallback || 'Account');
   if (text.includes('*')) return text;
@@ -43,10 +48,13 @@ function maskIdentity(value, fallback) {
   return `${text.slice(0, 1)}***`;
 }
 
-function safeIdentity(account, revealed) {
-  const masked = maskIdentity(account.masked_identity, account.account_key);
-  if (!revealed) return masked;
-  return String(account.display_identity || account.identity || masked);
+export function safeAccountIdentityProjection(account = {}, revealed = false) {
+  const identity = maskIdentity(account.masked_identity, account.account_key);
+  return {
+    identity,
+    accountKey: revealed ? String(account.account_key || '') : '',
+    fingerprint: revealed ? String(account.fingerprint || '') : '',
+  };
 }
 
 function dateLabel(value) {
@@ -73,16 +81,17 @@ function metricMeter(label, value) {
   return wrapper;
 }
 
-function statusValue(account, quota) {
+export function accountStatusValue(account, quota) {
   if (account.disabled) return ['Disabled', 'status-danger'];
+  if (account.unavailable) return ['Unavailable', 'status-warning'];
   if (!quota) return ['Awaiting refresh', 'status-neutral'];
-  if (quota.stale) return ['Stale snapshot', 'status-warning'];
   if (quota.refresh_error_code) return ['Refresh failed', 'status-danger'];
+  if (quota.stale) return ['Stale snapshot', 'status-warning'];
   return ['Healthy', 'status-success'];
 }
 
 function statusNode(account, quota) {
-  const [label, tone] = statusValue(account, quota);
+  const [label, tone] = accountStatusValue(account, quota);
   const wrapper = node('span', '', `status-inline ${tone}`);
   const marker = node('span', '', 'status-marker');
   marker.setAttribute('aria-hidden', 'true');
@@ -99,8 +108,27 @@ function cell(label, content, header = false) {
   return element;
 }
 
-function latestForAccount(history, key) {
-  return (history || []).find((record) => record.account_key === key) || null;
+export function latestAccountHistoryRecord(history, key) {
+  let latest = null;
+  let latestTime = Number.NaN;
+  for (const record of Array.isArray(history) ? history : []) {
+    if (record?.account_key !== key) continue;
+    if (!latest) {
+      latest = record;
+      latestTime = Date.parse(record.finished_at || record.started_at || '');
+      continue;
+    }
+    const currentTime = Date.parse(record.finished_at || record.started_at || '');
+    if (
+      (Number.isFinite(currentTime) && !Number.isFinite(latestTime))
+      || (Number.isFinite(currentTime) && currentTime >= latestTime)
+      || (!Number.isFinite(currentTime) && !Number.isFinite(latestTime))
+    ) {
+      latest = record;
+      latestTime = currentTime;
+    }
+  }
+  return latest;
 }
 
 export function renderAccounts(container, accounts = [], options = {}) {
@@ -124,21 +152,32 @@ export function renderAccounts(container, accounts = [], options = {}) {
     const key = String(account.account_key || '').trim();
     const quota = quotaByAccount[key];
     const snapshot = quota?.snapshot || {};
-    const latest = latestForAccount(history, key);
+    const latest = latestAccountHistoryRecord(history, key);
     const row = node('tr');
     row.dataset.accountKey = key;
 
+    const revealed = revealedKeys.has(key);
+    const projection = safeAccountIdentityProjection(account, revealed);
     const identity = node('div', '', 'identity-cell');
     const identityLine = node('div', '', 'identity-line');
-    const identityText = node('span', safeIdentity(account, revealedKeys.has(key)), 'identity-value');
-    identityText.dataset.identityState = revealedKeys.has(key) ? 'revealed' : 'masked';
+    const identityText = node('span', projection.identity, 'identity-value');
+    identityText.dataset.identityState = revealed ? 'revealed' : 'masked';
     identityLine.append(identityText);
-    identityLine.append(actionButton(revealedKeys.has(key) ? 'Mask' : 'Reveal', key, 'reveal-identity', revealedKeys.has(key)));
-    identity.append(identityLine, node('span', key, 'account-key'));
+    const revealButton = actionButton(revealed ? 'Mask' : 'Reveal', key, 'reveal-identity', revealed);
+    bindAccountRevealControl(revealButton, key, options.onReveal);
+    identityLine.append(revealButton);
+    identity.append(identityLine);
+    if (revealed) {
+      const safeDetails = node('span', '', 'account-safe-details');
+      if (projection.accountKey) safeDetails.append(node('span', `Account key: ${projection.accountKey}`, 'account-key'));
+      if (projection.fingerprint) safeDetails.append(node('span', `Fingerprint: ${projection.fingerprint}`, 'account-fingerprint'));
+      identity.append(safeDetails);
+    }
     const actionLabel = node('label', '', 'selection-control');
     const actionCheckbox = document.createElement('input');
     actionCheckbox.type = 'checkbox';
     actionCheckbox.checked = selectedKeys.has(key);
+    actionCheckbox.disabled = Boolean(account.unavailable || account.disabled);
     actionCheckbox.dataset.accountSelection = key;
     actionCheckbox.setAttribute('aria-label', `Select account ${maskIdentity(account.masked_identity, key)} for an action`);
     actionCheckbox.addEventListener('change', () => options.onSelectionChange?.(key, actionCheckbox.checked));

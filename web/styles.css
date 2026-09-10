@@ -161,7 +161,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--primary) 3%, var(--surface
 .identity-cell, .identity-line, .outcome-stack, .capture-stack, .quota-meter { display: grid; gap: 4px; }
 .identity-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .identity-value { font-weight: 700; }
-.account-key, .capture-time { color: var(--muted); font-size: .75rem; }
+.account-key, .account-fingerprint, .capture-time { color: var(--muted); font-size: .75rem; }
 .selection-control { color: var(--muted); font-size: .75rem; }
 .status-inline { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; font-size: .8125rem; font-weight: 700; }
 .status-marker { width: 9px; height: 9px; border: 2px solid var(--muted); border-radius: 50%; }
