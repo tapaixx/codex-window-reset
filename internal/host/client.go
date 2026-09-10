@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 )
 
 const (
@@ -110,6 +111,36 @@ func (c *Client) HTTPDo(ctx context.Context, request HTTPRequest) (HTTPResponse,
 // Log forwards a structured event to the host.  Logging is best effort: a
 // logging failure must not change the outcome of the operation being logged.
 func (c *Client) Log(ctx context.Context, level, message string, fields map[string]any) {
-	request := map[string]any{"level": level, "message": message, "fields": fields}
+	request := map[string]any{
+		"level":   safeLogLevel(level),
+		"message": "codex-window-reset",
+		"fields":  safeLogFields(fields),
+	}
 	_ = c.call(ctx, opLog, request, nil)
+}
+
+func safeLogLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug", "info", "warn", "error":
+		return strings.ToLower(strings.TrimSpace(level))
+	default:
+		return "info"
+	}
+}
+
+func safeLogFields(fields map[string]any) map[string]any {
+	allowed := map[string]struct{}{
+		"correlation_id":      {},
+		"account_fingerprint": {},
+		"error_code":          {},
+		"latency_ms":          {},
+		"http_category":       {},
+	}
+	safe := make(map[string]any, len(allowed))
+	for key, value := range fields {
+		if _, ok := allowed[key]; ok {
+			safe[key] = value
+		}
+	}
+	return safe
 }

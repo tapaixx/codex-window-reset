@@ -80,6 +80,39 @@ func TestListFiltersCodexAndRetainsUnavailableAndDisabled(t *testing.T) {
 	}
 }
 
+func TestListRejectsContradictoryAuthoritativeType(t *testing.T) {
+	fake := &fakeHost{files: []host.AuthFile{
+		{AuthIndex: "1", Provider: "codex", Type: "anthropic"},
+		{AuthIndex: "2", Provider: "anthropic", Type: "codex"},
+	}}
+	got, err := NewService(fake).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Key != "acct-2" {
+		t.Fatalf("authoritative type filtering = %#v", got)
+	}
+}
+
+func TestPlanLabelNeverFallsBackToIdentityMetadata(t *testing.T) {
+	view, err := Project(AuthFile{
+		AuthIndex: "7",
+		Provider:  "codex",
+		Name:      "alice@example.com",
+		Label:     "alice@example.com",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.PlanLabel != "" || bytes.Contains(encoded, []byte("alice@example.com")) {
+		t.Fatalf("identity metadata leaked through plan label: %s", encoded)
+	}
+}
+
 func TestFindReturnsStableAccountByKey(t *testing.T) {
 	fake := &fakeHost{files: []host.AuthFile{{AuthIndex: "7", Email: "alice@example.com", Provider: "codex"}}}
 	service := NewService(fake)

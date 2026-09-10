@@ -176,16 +176,21 @@ func maskEmail(email string) string {
 }
 
 func isCodex(file AuthFile) bool {
-	for _, value := range []string{file.Provider, file.Type, file.CredentialType, file.Kind} {
-		if strings.EqualFold(strings.TrimSpace(value), "codex") {
-			return true
+	// Prefer the host's explicit credential type over the progressively more
+	// generic provider/kind aliases. This prevents a contradictory entry such
+	// as type=anthropic, provider=codex from entering Codex discovery.
+	for _, value := range []string{file.Type, file.CredentialType, file.Provider, file.Kind} {
+		if value = strings.TrimSpace(value); value != "" {
+			return strings.EqualFold(value, "codex")
 		}
 	}
 	return false
 }
 
 func planLabel(file AuthFile) string {
-	for _, value := range []string{file.PlanLabel, file.Plan, file.Label, file.AccountType, file.Name} {
+	// Only plan-specific host metadata is safe for the management projection.
+	// Generic Label and Name values may be credential filenames or identities.
+	for _, value := range []string{file.PlanLabel, file.Plan, file.AccountType} {
 		if value = strings.TrimSpace(value); value != "" {
 			return value
 		}

@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,5 +81,48 @@ func TestClientPropagatesCallerErrorWithoutWrappingSecrets(t *testing.T) {
 	_, err := client.ListAuthFiles(context.Background())
 	if !errors.Is(err, secretErr) {
 		t.Fatalf("error = %v, want caller error", err)
+	}
+}
+
+func TestLogAllowsOnlySafeStructuredFields(t *testing.T) {
+	var encoded []byte
+	client := NewClient(func(_ context.Context, operation string, request, _ any) error {
+		if operation != "host.log" {
+			t.Fatalf("operation = %q", operation)
+		}
+		var err error
+		encoded, err = json.Marshal(request)
+		return err
+	})
+	client.Log(context.Background(), "fixture-token", "alice@example.com", map[string]any{
+		"correlation_id":      "corr-1",
+		"account_fingerprint": "abc123",
+		"error_code":          "credential_error",
+		"latency_ms":          12,
+		"http_category":       "2xx",
+		"access_token":        "fixture-token",
+		"management_key":      "management-secret",
+		"headers":             map[string]string{"Authorization": "Bearer fixture-token"},
+		"body":                "upstream-body",
+		"email":               "alice@example.com",
+	})
+	for _, forbidden := range [][]byte{
+		[]byte("fixture-token"), []byte("management-secret"), []byte("Authorization"),
+		[]byte("upstream-body"), []byte("alice@example.com"), []byte("access_token"),
+		[]byte("management_key"), []byte("headers"), []byte("body"), []byte("email"),
+	} {
+		if bytes.Contains(encoded, forbidden) {
+			t.Fatalf("log leaked %q: %s", forbidden, encoded)
+		}
+	}
+	for _, required := range [][]byte{
+		[]byte(`"level":"info"`), []byte(`"message":"codex-window-reset"`),
+		[]byte(`"correlation_id":"corr-1"`), []byte(`"account_fingerprint":"abc123"`),
+		[]byte(`"error_code":"credential_error"`), []byte(`"latency_ms":12`),
+		[]byte(`"http_category":"2xx"`),
+	} {
+		if !bytes.Contains(encoded, required) {
+			t.Fatalf("log missing %q: %s", required, encoded)
+		}
 	}
 }
