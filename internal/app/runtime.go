@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tapaixx/codex-window-reset/internal/domain"
+	"github.com/tapaixx/codex-window-reset/internal/schedule"
 )
 
 // Dependencies are the host, persistence, and pure-domain seams Runtime
@@ -32,15 +33,16 @@ type Dependencies struct {
 // Runtime is the sole owner of mutable application orchestration state.  In
 // particular, the busy registry and bulk run state are never package globals.
 type Runtime struct {
-	mu       sync.RWMutex
-	deps     Dependencies
-	config   domain.Config
-	run      *runState
-	busy     map[string]struct{}
-	stop     chan struct{}
-	wg       sync.WaitGroup
-	stopOnce sync.Once
-	stopped  bool
+	mu        sync.RWMutex
+	deps      Dependencies
+	config    domain.Config
+	run       *runState
+	busy      map[string]struct{}
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	stopOnce  sync.Once
+	stopped   bool
+	scheduler *schedule.Scheduler
 
 	// storeErrorCode is intentionally only a code.  Repository errors may
 	// contain filesystem details and must not cross the management boundary.
@@ -122,6 +124,11 @@ func New(deps Dependencies) (*Runtime, error) {
 		}
 		return nil, err
 	}
+	planner := deps.Planner
+	if planner == nil {
+		planner = schedule.Planner{}
+	}
+	runtime.scheduler = schedule.NewScheduler(deps.Clock, planner, deps.State, runtime)
 	return runtime, nil
 }
 
@@ -204,6 +211,30 @@ func (r *Runtime) clearStoreError() {
 	r.mu.Unlock()
 }
 
+// Start recovers persisted scheduler ownership and reconciles the current
+// configuration. Runtime construction remains inert so callers can finish
+// dependency wiring before any automatic request is eligible.
+func (r *Runtime) Start() {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	if r.stopped {
+		r.mu.RUnlock()
+		return
+	}
+	scheduler := r.scheduler
+	config := cloneConfig(r.config)
+	r.mu.RUnlock()
+	if scheduler == nil {
+		return
+	}
+	scheduler.Start()
+	if err := scheduler.Reconcile(config); err != nil {
+		r.setStoreError(err)
+	}
+}
+
 // Stop cancels active manual work, prevents future work from starting, and
 // waits for all Runtime-owned goroutines.  It is safe to call repeatedly.
 func (r *Runtime) Stop() {
@@ -221,6 +252,9 @@ func (r *Runtime) Stop() {
 		r.mu.Unlock()
 		if cancel != nil {
 			cancel()
+		}
+		if r.scheduler != nil {
+			r.scheduler.Stop()
 		}
 	})
 	r.wg.Wait()

@@ -16,6 +16,10 @@ const fallbackSnapshotStaleAfter = 5 * time.Minute
 // every attempted or skipped occurrence has one durable operation record,
 // including a sanitized reason for an eligibility skip.
 func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedOccurrence) domain.OperationRecord {
+	return r.executePreheat(ctx, occurrence, domain.TriggerPreheat)
+}
+
+func (r *Runtime) executePreheat(ctx context.Context, occurrence domain.PlannedOccurrence, trigger domain.OperationTrigger) domain.OperationRecord {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -25,7 +29,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 
 	account, findErr := r.deps.Accounts.Find(ctx, key)
 	if findErr != nil {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.AccountKey = key
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
@@ -37,7 +41,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 	account.Key = key
 
 	if occurrence.Missed {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
 		record.ErrorCode = domain.CodeConfigInvalid
@@ -48,7 +52,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 
 	config := r.configSnapshot()
 	if !config.Enabled || !isScheduled(config, key) {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
 		record.FinishedAt = r.now()
@@ -56,7 +60,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 		return record
 	}
 	if account.Disabled {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
 		record.ErrorCode = domain.CodeAccountDisabled
@@ -65,7 +69,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 		return record
 	}
 	if account.Unavailable {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
 		record.ErrorCode = domain.CodeAccountUnavailable
@@ -74,7 +78,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 		return record
 	}
 	if !r.acquireBusy(key) {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestResponseError
 		record.WindowOutcome = domain.WindowNotObserved
 		record.ErrorCode = domain.CodeAccountBusy
@@ -88,7 +92,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 	now := r.now()
 	decision := r.evaluateQuota(config, key, now, before, refreshErr)
 	if decision == domain.DecisionGuardrailHold || decision == domain.DecisionSufficientWindow {
-		record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
 		record.Decision = decision
@@ -112,7 +116,7 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 	}
 	after, _ := r.refreshSnapshot(ctx, account)
 
-	record := operationBaseAt(r, domain.TriggerPreheat, occurrence.ID, account, started)
+	record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 	record.RequestOutcome = result.Outcome
 	record.WindowOutcome = classifyWindow(result.Outcome, before, after)
 	record.Decision = decision
@@ -134,7 +138,9 @@ func (r *Runtime) ExecutePreheat(ctx context.Context, occurrence domain.PlannedO
 	if compensable(result) {
 		due = r.now().Add(5 * time.Minute)
 	}
-	r.updateCompensation(occurrence, due)
+	if trigger == domain.TriggerPreheat {
+		r.updateCompensation(occurrence, due)
+	}
 	r.appendHistory(record)
 	return record
 }
@@ -147,6 +153,44 @@ func isScheduled(config domain.Config, key string) bool {
 		}
 	}
 	return false
+}
+
+// CompensationEligible re-reads mutable host and guardrail state immediately
+// before the scheduler consumes its one compensation attempt. It is kept
+// separate from ExecutePreheat so the scheduler can persist the attempted
+// marker before invoking any request code.
+func (r *Runtime) CompensationEligible(ctx context.Context, occurrence domain.PlannedOccurrence) bool {
+	if r == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	key := normalizeKey(occurrence.AccountKey)
+	config := r.configSnapshot()
+	if !config.Enabled || !isScheduled(config, key) {
+		return false
+	}
+	account, err := r.deps.Accounts.Find(ctx, key)
+	if err != nil || account.Disabled || account.Unavailable {
+		return false
+	}
+	state, err := r.deps.State.Load()
+	if err != nil {
+		r.setStoreError(err)
+		return false
+	}
+	if _, held := state.GuardrailHolds[key]; held {
+		return false
+	}
+	return true
+}
+
+// ExecuteCompensation labels the one-shot follow-up distinctly while sharing
+// the exact preheat request and eligibility behavior. The scheduler clears the
+// persisted due timestamp after this call regardless of the result.
+func (r *Runtime) ExecuteCompensation(ctx context.Context, occurrence domain.PlannedOccurrence) domain.OperationRecord {
+	return r.executePreheat(ctx, occurrence, domain.TriggerCompensation)
 }
 
 func (r *Runtime) evaluateQuota(config domain.Config, key string, now time.Time, before *domain.UsageSnapshot, refreshErr error) domain.QuotaDecision {
