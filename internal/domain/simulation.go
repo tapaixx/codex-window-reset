@@ -1,12 +1,35 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type TimelineSegment struct {
 	Kind       string    `json:"kind"`
 	Start      time.Time `json:"start"`
 	End        time.Time `json:"end"`
 	AccountKey string    `json:"account_key,omitempty"`
+}
+
+func (s TimelineSegment) MarshalJSON() ([]byte, error) {
+	type wire TimelineSegment
+	value := wire(s)
+	value.Start = s.Start.UTC()
+	value.End = s.End.UTC()
+	return json.Marshal(value)
+}
+
+func (s *TimelineSegment) UnmarshalJSON(data []byte) error {
+	type wire TimelineSegment
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = TimelineSegment(value)
+	s.Start = s.Start.UTC()
+	s.End = s.End.UTC()
+	return nil
 }
 
 type StrategyMetrics struct {
@@ -31,4 +54,22 @@ type StatusView struct {
 	RunID          string               `json:"run_id,omitempty"`
 	RunTotal       int                  `json:"run_total"`
 	RunCompleted   int                  `json:"run_completed"`
+}
+
+func (s StatusView) MarshalJSON() ([]byte, error) {
+	type wire StatusView
+	value := wire(s)
+	value.NextRuns = utcTimes(s.NextRuns)
+	return json.Marshal(value)
+}
+
+func (s *StatusView) UnmarshalJSON(data []byte) error {
+	type wire StatusView
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = StatusView(value)
+	s.NextRuns = utcTimes(s.NextRuns)
+	return nil
 }

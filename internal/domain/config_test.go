@@ -49,6 +49,7 @@ func TestValidateConfigRejectsMalformedAndUnorderedCalendarValues(t *testing.T) 
 		edit func(*Config)
 	}{
 		{name: "timezone", edit: func(cfg *Config) { cfg.Timezone = "Not/IANA" }},
+		{name: "local timezone", edit: func(cfg *Config) { cfg.Timezone = "Local" }},
 		{name: "weekday out of range", edit: func(cfg *Config) { cfg.Weekdays = []int{1, 8} }},
 		{name: "duplicate weekday", edit: func(cfg *Config) { cfg.Weekdays = []int{1, 1} }},
 		{name: "clock not round trip", edit: func(cfg *Config) { cfg.WorkPeriods = []LocalPeriod{{Start: "9:00", End: "12:00"}} }},

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type OperationTrigger string
 
@@ -27,6 +30,26 @@ type OperationRecord struct {
 	ErrorCode      ErrorCode        `json:"error_code,omitempty"`
 }
 
+func (r OperationRecord) MarshalJSON() ([]byte, error) {
+	type wire OperationRecord
+	value := wire(r)
+	value.StartedAt = r.StartedAt.UTC()
+	value.FinishedAt = r.FinishedAt.UTC()
+	return json.Marshal(value)
+}
+
+func (r *OperationRecord) UnmarshalJSON(data []byte) error {
+	type wire OperationRecord
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*r = OperationRecord(value)
+	r.StartedAt = r.StartedAt.UTC()
+	r.FinishedAt = r.FinishedAt.UTC()
+	return nil
+}
+
 type OccurrenceStatus string
 
 const (
@@ -50,8 +73,84 @@ type PlannedOccurrence struct {
 	MissedReason string    `json:"missed_reason,omitempty"`
 }
 
+func (o PlannedOccurrence) MarshalJSON() ([]byte, error) {
+	type wire PlannedOccurrence
+	value := wire(o)
+	value.WindowStart = o.WindowStart.UTC()
+	value.WindowEnd = o.WindowEnd.UTC()
+	value.PlannedAt = o.PlannedAt.UTC()
+	return json.Marshal(value)
+}
+
+func (o *PlannedOccurrence) UnmarshalJSON(data []byte) error {
+	type wire PlannedOccurrence
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*o = PlannedOccurrence(value)
+	o.WindowStart = o.WindowStart.UTC()
+	o.WindowEnd = o.WindowEnd.UTC()
+	o.PlannedAt = o.PlannedAt.UTC()
+	return nil
+}
+
 type OccurrenceState struct {
 	PlannedOccurrence
+	Status                OccurrenceStatus `json:"status"`
+	CompensationDueAt     time.Time        `json:"compensation_due_at,omitempty"`
+	CompensationAttempted bool             `json:"compensation_attempted"`
+}
+
+func (s OccurrenceState) MarshalJSON() ([]byte, error) {
+	return json.Marshal(occurrenceStateWire{
+		ID:                    s.ID,
+		AccountKey:            s.AccountKey,
+		LocalDate:             s.LocalDate,
+		PeriodIndex:           s.PeriodIndex,
+		WindowStart:           s.WindowStart.UTC(),
+		WindowEnd:             s.WindowEnd.UTC(),
+		PlannedAt:             s.PlannedAt.UTC(),
+		Missed:                s.Missed,
+		MissedReason:          s.MissedReason,
+		Status:                s.Status,
+		CompensationDueAt:     s.CompensationDueAt.UTC(),
+		CompensationAttempted: s.CompensationAttempted,
+	})
+}
+
+func (s *OccurrenceState) UnmarshalJSON(data []byte) error {
+	var value occurrenceStateWire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	s.PlannedOccurrence = PlannedOccurrence{
+		ID:           value.ID,
+		AccountKey:   value.AccountKey,
+		LocalDate:    value.LocalDate,
+		PeriodIndex:  value.PeriodIndex,
+		WindowStart:  value.WindowStart.UTC(),
+		WindowEnd:    value.WindowEnd.UTC(),
+		PlannedAt:    value.PlannedAt.UTC(),
+		Missed:       value.Missed,
+		MissedReason: value.MissedReason,
+	}
+	s.Status = value.Status
+	s.CompensationDueAt = value.CompensationDueAt.UTC()
+	s.CompensationAttempted = value.CompensationAttempted
+	return nil
+}
+
+type occurrenceStateWire struct {
+	ID                    string           `json:"id"`
+	AccountKey            string           `json:"account_key"`
+	LocalDate             string           `json:"local_date"`
+	PeriodIndex           int              `json:"period_index"`
+	WindowStart           time.Time        `json:"window_start"`
+	WindowEnd             time.Time        `json:"window_end"`
+	PlannedAt             time.Time        `json:"planned_at"`
+	Missed                bool             `json:"missed"`
+	MissedReason          string           `json:"missed_reason,omitempty"`
 	Status                OccurrenceStatus `json:"status"`
 	CompensationDueAt     time.Time        `json:"compensation_due_at,omitempty"`
 	CompensationAttempted bool             `json:"compensation_attempted"`
@@ -62,4 +161,22 @@ type RuntimeState struct {
 	Occurrences    map[string]OccurrenceState `json:"occurrences"`
 	NextRuns       map[string]time.Time       `json:"next_runs"`
 	GuardrailHolds map[string]GuardrailHold   `json:"guardrail_holds"`
+}
+
+func (s RuntimeState) MarshalJSON() ([]byte, error) {
+	type wire RuntimeState
+	value := wire(s)
+	value.NextRuns = utcTimes(s.NextRuns)
+	return json.Marshal(value)
+}
+
+func (s *RuntimeState) UnmarshalJSON(data []byte) error {
+	type wire RuntimeState
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = RuntimeState(value)
+	s.NextRuns = utcTimes(s.NextRuns)
+	return nil
 }

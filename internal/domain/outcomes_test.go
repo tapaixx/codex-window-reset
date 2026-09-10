@@ -3,7 +3,9 @@ package domain
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestJSONEnumValuesRemainStable(t *testing.T) {
@@ -92,5 +94,59 @@ func TestResetHTTPResultHasNoJSONExportPath(t *testing.T) {
 	}
 	if !bytes.Equal(encoded, []byte("{}")) {
 		t.Fatalf("reset HTTP result exported JSON fields: %s", encoded)
+	}
+}
+
+func TestJSONTimeFieldsNormalizeToUTC(t *testing.T) {
+	// This instant is intentionally represented with a non-UTC offset. Every
+	// JSON-facing domain record should expose the same UTC RFC3339 instant.
+	const wantUTC = "2026-01-02T03:04:05.123456789Z"
+	const wantOffset = "+08:00"
+	offset := time.FixedZone("operator-offset", 8*60*60)
+	instant := time.Date(2026, time.January, 2, 11, 4, 5, 123456789, offset)
+	credits := 2
+	window := UsageWindow{DurationMinutes: 300, RemainingPercent: 80, ResetAt: instant, Short: true}
+	planned := PlannedOccurrence{
+		ID:          "occurrence",
+		AccountKey:  "account",
+		LocalDate:   "2026-01-02",
+		PeriodIndex: 0,
+		WindowStart: instant,
+		WindowEnd:   instant,
+		PlannedAt:   instant,
+	}
+
+	cases := []struct {
+		name  string
+		value any
+	}{
+		{name: "usage window", value: window},
+		{name: "reset credit", value: ResetCredit{ID: "credit", ExpiresAt: instant}},
+		{name: "usage snapshot", value: UsageSnapshot{AccountKey: "account", CapturedAt: instant, Windows: []UsageWindow{window}, ResetCredits: []ResetCredit{{ID: "credit", ExpiresAt: instant}}, ResetApplicableCount: &credits, ResetInfoComplete: true}},
+		{name: "snapshot view", value: SnapshotView{Snapshot: UsageSnapshot{AccountKey: "account", CapturedAt: instant, Windows: []UsageWindow{window}}, Stale: false, LastAttemptAt: instant}},
+		{name: "guardrail hold", value: GuardrailHold{AccountKey: "account", EstablishedAt: instant, FloorPercent: 10}},
+		{name: "operation", value: OperationRecord{ID: "operation", CorrelationID: "correlation", Trigger: TriggerPreheat, AccountKey: "account", MaskedIdentity: "a***@example.com", StartedAt: instant, FinishedAt: instant, RequestOutcome: RequestSucceeded, WindowOutcome: WindowVerifiedStarted, LatencyMS: 1}},
+		{name: "planned occurrence", value: planned},
+		{name: "occurrence state", value: OccurrenceState{PlannedOccurrence: planned, Status: OccurrencePlanned, CompensationDueAt: instant}},
+		{name: "runtime state", value: RuntimeState{SchemaVersion: 1, Occurrences: map[string]OccurrenceState{"occurrence": {PlannedOccurrence: planned, Status: OccurrencePlanned}}, NextRuns: map[string]time.Time{"occurrence": instant}, GuardrailHolds: map[string]GuardrailHold{"account": {AccountKey: "account", EstablishedAt: instant, FloorPercent: 10}}}},
+		{name: "reset audit", value: ResetAudit{IdempotencyKey: "idempotency", RequestedAt: instant, FinishedAt: instant, AccountKey: "account", MaskedIdentity: "a***@example.com", PriorApplicableCredits: &credits, Outcome: ResetSucceeded, CorrelationID: "correlation"}},
+		{name: "timeline segment", value: TimelineSegment{Kind: "work", Start: instant, End: instant, AccountKey: "account"}},
+		{name: "simulation result", value: SimulationResult{WorkMinutes: 1, PreheatWindows: []PlannedOccurrence{planned}, TimelineSegments: []TimelineSegment{{Kind: "work", Start: instant, End: instant}}}},
+		{name: "status view", value: StatusView{Enabled: true, NextRuns: map[string]time.Time{"occurrence": instant}, RunID: "run", RunTotal: 1, RunCompleted: 1}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(encoded), wantUTC) {
+				t.Fatalf("JSON did not expose UTC instant %q: %s", wantUTC, encoded)
+			}
+			if strings.Contains(string(encoded), wantOffset) {
+				t.Fatalf("JSON retained non-UTC offset %q: %s", wantOffset, encoded)
+			}
+		})
 	}
 }

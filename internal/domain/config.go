@@ -70,6 +70,9 @@ func ValidateConfig(cfg Config, mode ValidationMode, knownAccounts map[string]st
 	if mode != ValidatePersisted && mode != ValidateSimulation {
 		return invalid("unsupported validation mode")
 	}
+	if cfg.Timezone == "Local" {
+		return invalid("timezone must be a valid IANA location")
+	}
 	if _, err := time.LoadLocation(cfg.Timezone); err != nil {
 		return invalid("timezone must be a valid IANA location")
 	}

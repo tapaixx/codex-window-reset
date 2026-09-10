@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type RequestOutcome string
 
@@ -36,9 +39,45 @@ type UsageWindow struct {
 	Short            bool      `json:"short"`
 }
 
+func (w UsageWindow) MarshalJSON() ([]byte, error) {
+	type wire UsageWindow
+	value := wire(w)
+	value.ResetAt = w.ResetAt.UTC()
+	return json.Marshal(value)
+}
+
+func (w *UsageWindow) UnmarshalJSON(data []byte) error {
+	type wire UsageWindow
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*w = UsageWindow(value)
+	w.ResetAt = w.ResetAt.UTC()
+	return nil
+}
+
 type ResetCredit struct {
 	ID        string    `json:"id,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
+}
+
+func (c ResetCredit) MarshalJSON() ([]byte, error) {
+	type wire ResetCredit
+	value := wire(c)
+	value.ExpiresAt = c.ExpiresAt.UTC()
+	return json.Marshal(value)
+}
+
+func (c *ResetCredit) UnmarshalJSON(data []byte) error {
+	type wire ResetCredit
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*c = ResetCredit(value)
+	c.ExpiresAt = c.ExpiresAt.UTC()
+	return nil
 }
 
 type UsageSnapshot struct {
@@ -50,6 +89,24 @@ type UsageSnapshot struct {
 	ResetInfoComplete    bool          `json:"reset_info_complete"`
 }
 
+func (s UsageSnapshot) MarshalJSON() ([]byte, error) {
+	type wire UsageSnapshot
+	value := wire(s)
+	value.CapturedAt = s.CapturedAt.UTC()
+	return json.Marshal(value)
+}
+
+func (s *UsageSnapshot) UnmarshalJSON(data []byte) error {
+	type wire UsageSnapshot
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = UsageSnapshot(value)
+	s.CapturedAt = s.CapturedAt.UTC()
+	return nil
+}
+
 type SnapshotView struct {
 	Snapshot         UsageSnapshot `json:"snapshot"`
 	Stale            bool          `json:"stale"`
@@ -57,10 +114,46 @@ type SnapshotView struct {
 	RefreshErrorCode ErrorCode     `json:"refresh_error_code,omitempty"`
 }
 
+func (s SnapshotView) MarshalJSON() ([]byte, error) {
+	type wire SnapshotView
+	value := wire(s)
+	value.LastAttemptAt = s.LastAttemptAt.UTC()
+	return json.Marshal(value)
+}
+
+func (s *SnapshotView) UnmarshalJSON(data []byte) error {
+	type wire SnapshotView
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = SnapshotView(value)
+	s.LastAttemptAt = s.LastAttemptAt.UTC()
+	return nil
+}
+
 type GuardrailHold struct {
 	AccountKey    string    `json:"account_key"`
 	EstablishedAt time.Time `json:"established_at"`
 	FloorPercent  int       `json:"floor_percent"`
+}
+
+func (h GuardrailHold) MarshalJSON() ([]byte, error) {
+	type wire GuardrailHold
+	value := wire(h)
+	value.EstablishedAt = h.EstablishedAt.UTC()
+	return json.Marshal(value)
+}
+
+func (h *GuardrailHold) UnmarshalJSON(data []byte) error {
+	type wire GuardrailHold
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*h = GuardrailHold(value)
+	h.EstablishedAt = h.EstablishedAt.UTC()
+	return nil
 }
 
 type QuotaDecision string
