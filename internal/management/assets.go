@@ -50,6 +50,9 @@ func (a Assets) Read(assetPath string) ([]byte, string, error) {
 		return nil, "", fs.ErrNotExist
 	}
 	name := strings.TrimPrefix(assetPath, "/")
+	if assetPath == "/panel" {
+		name = "panel.html"
+	}
 	candidates := []string{name, "web/" + name}
 	var lastErr error
 	for _, candidate := range candidates {

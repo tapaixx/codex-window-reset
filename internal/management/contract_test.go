@@ -210,6 +210,40 @@ func TestResourceRegistrationUsesExactContentTypes(t *testing.T) {
 	}
 }
 
+func TestManagementResourcesServeEveryRegisteredAsset(t *testing.T) {
+	router := NewRouter(contractRuntimeFixture(), contractAssets(t))
+	expectedContentTypes := map[string]string{
+		"/panel":                "text/html; charset=utf-8",
+		"/styles.css":           "text/css; charset=utf-8",
+		"/modules/api.js":       "text/javascript; charset=utf-8",
+		"/modules/state.js":     "text/javascript; charset=utf-8",
+		"/modules/accounts.js":  "text/javascript; charset=utf-8",
+		"/modules/schedule.js":  "text/javascript; charset=utf-8",
+		"/modules/simulator.js": "text/javascript; charset=utf-8",
+		"/modules/history.js":   "text/javascript; charset=utf-8",
+		"/modules/main.js":      "text/javascript; charset=utf-8",
+	}
+	for _, resource := range Registration("codex-window-reset-linux-amd64").Resources {
+		wantContentType, ok := expectedContentTypes[resource.Path]
+		if !ok {
+			t.Fatalf("resource %q has no expected content type", resource.Path)
+		}
+		response := router.Handle(Request{
+			Method: "GET",
+			Path:   "/v0/resource/plugins/codex-window-reset-linux-amd64" + resource.Path,
+		})
+		if response.Status != 200 {
+			t.Fatalf("resource %q status = %d, want 200: %s", resource.Path, response.Status, response.Body)
+		}
+		if got := response.Headers["Content-Type"]; got != wantContentType {
+			t.Fatalf("resource %q content type = %q, want %q", resource.Path, got, wantContentType)
+		}
+		if response.ContentType != wantContentType {
+			t.Fatalf("resource %q response content type = %q, want %q", resource.Path, response.ContentType, wantContentType)
+		}
+	}
+}
+
 func TestPluginIDExtractionAcceptsHostFieldVariantsAndRejectsAmbiguousPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
