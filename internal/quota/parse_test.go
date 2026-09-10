@@ -125,6 +125,26 @@ func TestParseUsageRejectsInvalidOrUnrecognizedPayloads(t *testing.T) {
 	}
 }
 
+func TestParseUsageRejectsInvalidUsageAndRemainingRanges(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "negative used percent", raw: `{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":-1}}}`},
+		{name: "used percent above one hundred", raw: `{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":101}}}`},
+		{name: "negative remaining percent", raw: `{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"remaining_percent":-1}}}`},
+		{name: "remaining percent above one hundred", raw: `{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"remaining_percent":101}}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseUsage([]byte(tt.raw), now); err == nil {
+				t.Fatal("ParseUsage accepted an out-of-range usage value")
+			}
+		})
+	}
+}
+
 func TestParseUsageParsesNumericAndRFC3339ResetBoundariesAsUTC(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	raw := []byte(`{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":10,"reset_at":"1788973200000"},"secondary_window":{"limit_window_seconds":604800,"used_percent":20,"reset_at":"2026-09-16T20:00:00+08:00"}}}`)

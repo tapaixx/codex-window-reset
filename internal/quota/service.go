@@ -319,7 +319,9 @@ func (s *Service) Evaluate(cfg domain.Config, key string, now time.Time) domain.
 	key = strings.TrimSpace(key)
 	view, ok := s.Get(key, now)
 	if !ok {
-		if hold, loadErr := s.loadHold(key); loadErr == nil && hold != nil {
+		if hold, loadErr := s.loadHold(key); loadErr != nil {
+			return domain.DecisionGuardrailHold
+		} else if hold != nil {
 			return domain.DecisionGuardrailHold
 		}
 		return domain.DecisionUnknownFailOpen
@@ -331,10 +333,7 @@ func (s *Service) Evaluate(cfg domain.Config, key string, now time.Time) domain.
 		hold, stateErr = s.transitionHold(view, cfg, key, now)
 	}
 	if stateErr != nil {
-		if view.RefreshErrorCode == "" && !view.Stale && anyLongAtOrBelow(view.Snapshot, cfg.LongWindowFloorPercent) {
-			return domain.DecisionGuardrailHold
-		}
-		return decide(view, nil, cfg, now)
+		return domain.DecisionGuardrailHold
 	}
 	return decide(view, hold, cfg, now)
 }
@@ -381,22 +380,24 @@ func (s *Service) transitionHold(view domain.SnapshotView, cfg domain.Config, ke
 			resulting = &created
 			return nil
 		})
-		return resulting, err
+		if err != nil {
+			return hold, err
+		}
+		return resulting, nil
 	}
 	if hold != nil && hasLong && allLongAbove(view.Snapshot, cfg.LongWindowFloorPercent) {
-		var resulting *domain.GuardrailHold
 		err := s.states.Update(func(state *domain.RuntimeState) error {
-			current, ok := state.GuardrailHolds[key]
+			_, ok := state.GuardrailHolds[key]
 			if !ok {
-				resulting = nil
 				return nil
 			}
 			delete(state.GuardrailHolds, key)
-			_ = current
-			resulting = nil
 			return nil
 		})
-		return resulting, err
+		if err != nil {
+			return hold, err
+		}
+		return nil, nil
 	}
 	return hold, nil
 }

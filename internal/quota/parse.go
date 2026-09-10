@@ -60,7 +60,7 @@ func ParseUsage(raw []byte, capturedAt time.Time) (domain.UsageSnapshot, error) 
 	for _, candidate := range candidates {
 		window, seconds, ok := parseWindow(candidate, capturedAt, limitReached)
 		if !ok {
-			continue
+			return domain.UsageSnapshot{}, errInvalidUsage
 		}
 		parsed = append(parsed, parsedWindow{window: window, durationSecond: seconds, order: candidate.order})
 	}
@@ -229,12 +229,14 @@ func parseWindow(candidate windowCandidate, capturedAt time.Time, limitReached b
 	used, hasUsed := usagePercent(candidate.value)
 	resetAt := resetAtFromWindow(candidate.value, capturedAt)
 	if !hasUsed && limitReached && !resetAt.IsZero() {
+		if hasValue(candidate.value, "used_percent", "usedPercent", "used", "used_fraction", "usedFraction", "remaining_percent", "remainingPercent") {
+			return domain.UsageWindow{}, 0, false
+		}
 		used, hasUsed = 100, true
 	}
 	if !hasUsed || !finite(used) {
 		return domain.UsageWindow{}, 0, false
 	}
-	used = clamp(used, 0, 100)
 	minutes := int(math.Round(seconds / 60))
 	if minutes < 1 {
 		minutes = 1
@@ -250,11 +252,14 @@ func usagePercent(object map[string]any) (float64, bool) {
 	value, ok := firstAny(object, "used_percent", "usedPercent", "used", "used_fraction", "usedFraction")
 	if ok {
 		number, valid := numberValue(value)
-		if !valid {
+		if !valid || !finite(number) {
 			return 0, false
 		}
 		if number >= 0 && number <= 1 {
 			number *= 100
+		}
+		if number < 0 || number > 100 {
+			return 0, false
 		}
 		return number, true
 	}
@@ -263,11 +268,14 @@ func usagePercent(object map[string]any) (float64, bool) {
 		return 0, false
 	}
 	remaining, valid := numberValue(value)
-	if !valid {
+	if !valid || !finite(remaining) {
 		return 0, false
 	}
 	if remaining >= 0 && remaining <= 1 {
 		remaining *= 100
+	}
+	if remaining < 0 || remaining > 100 {
+		return 0, false
 	}
 	return 100 - remaining, true
 }
@@ -315,22 +323,27 @@ func parseResetCreditValue(value any) resetCreditInfo {
 		if nested := firstObject(object, "rate_limit_reset_credits", "rateLimitResetCredits", "data"); nested != nil && !hasResetShape(object) {
 			return parseResetCreditValue(nested)
 		}
-		info := resetCreditInfo{valid: hasResetShape(object)}
-		if number, ok := numberValue(firstValue(object, "available", "available_count", "availableCount")); ok {
-			count := nonNegativeCount(number)
-			info.availableCount = &count
+		available, availablePresent, valid := resetCountField(object, "available", "available_count", "availableCount")
+		if !valid {
+			return resetCreditInfo{}
 		}
-		if number, ok := numberValue(firstValue(object, "applicable", "applicable_available", "applicable_available_count", "applicableAvailable", "applicableAvailableCount")); ok {
-			count := nonNegativeCount(number)
-			info.applicableAvailableCount = &count
+		applicable, applicablePresent, valid := resetCountField(object, "applicable", "applicable_available", "applicable_available_count", "applicableAvailable", "applicableAvailableCount")
+		if !valid {
+			return resetCreditInfo{}
 		}
-		creditsValue, creditsOK := firstAny(object, "credits", "reset_credits", "resetCredits")
-		if creditsOK {
-			info.valid = true
-			info.creditsPresent = true
-			if list, listOK := creditsValue.([]any); listOK {
-				info.credits = parseCredits(list)
-			}
+		credits, creditsPresent, valid := resetCreditListField(object, "credits", "reset_credits", "resetCredits")
+		if !valid {
+			return resetCreditInfo{}
+		}
+		if !availablePresent && !applicablePresent && !creditsPresent {
+			return resetCreditInfo{}
+		}
+		info := resetCreditInfo{
+			availableCount:           available,
+			applicableAvailableCount: applicable,
+			credits:                  credits,
+			valid:                    true,
+			creditsPresent:           creditsPresent,
 		}
 		sort.SliceStable(info.credits, func(i, j int) bool {
 			return info.credits[i].ExpiresAt.Before(info.credits[j].ExpiresAt)
@@ -338,9 +351,112 @@ func parseResetCreditValue(value any) resetCreditInfo {
 		return info
 	}
 	if list, ok := value.([]any); ok {
-		return resetCreditInfo{valid: true, credits: parseCredits(list), creditsPresent: true}
+		credits, valid := parseCreditListValue(list)
+		if !valid {
+			return resetCreditInfo{}
+		}
+		return resetCreditInfo{valid: true, credits: credits, creditsPresent: true}
 	}
 	return resetCreditInfo{}
+}
+
+func resetCountField(object map[string]any, names ...string) (*int, bool, bool) {
+	var result *int
+	present := false
+	for _, name := range names {
+		value, ok := object[name]
+		if !ok {
+			continue
+		}
+		present = true
+		count, valid := resetCountValue(value)
+		if !valid {
+			return nil, present, false
+		}
+		if result == nil {
+			result = &count
+		}
+	}
+	return result, present, true
+}
+
+func resetCountValue(value any) (int, bool) {
+	if _, stringValue := value.(string); stringValue {
+		return 0, false
+	}
+	number, ok := numberValue(value)
+	if !ok || !finite(number) || number < 0 || math.Trunc(number) != number {
+		return 0, false
+	}
+	// Leave a small safety margin at the platform int limit so conversion can
+	// never wrap a malformed upstream count.
+	if number >= float64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(number), true
+}
+
+func resetCreditListField(object map[string]any, names ...string) ([]domain.ResetCredit, bool, bool) {
+	var result []domain.ResetCredit
+	present := false
+	for _, name := range names {
+		value, ok := object[name]
+		if !ok {
+			continue
+		}
+		credits, valid := parseCreditListValue(value)
+		if !valid {
+			return nil, true, false
+		}
+		if !present {
+			result = credits
+		}
+		present = true
+	}
+	return result, present, true
+}
+
+func parseCreditListValue(value any) ([]domain.ResetCredit, bool) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	for _, item := range list {
+		object, ok := item.(map[string]any)
+		if !ok || object == nil || !validCreditObject(object) {
+			return nil, false
+		}
+	}
+	return parseCredits(list), true
+}
+
+func validCreditObject(object map[string]any) bool {
+	if !validOptionalStringFields(object, "id", "ID", "reset_type", "resetType", "status") {
+		return false
+	}
+	foundExpiry := false
+	for _, name := range []string{"expires_at", "expiresAt"} {
+		value, ok := object[name]
+		if !ok {
+			continue
+		}
+		foundExpiry = true
+		if timeValue(value).IsZero() {
+			return false
+		}
+	}
+	return foundExpiry
+}
+
+func validOptionalStringFields(object map[string]any, names ...string) bool {
+	for _, name := range names {
+		if value, ok := object[name]; ok {
+			if _, valid := value.(string); !valid {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func hasResetShape(object map[string]any) bool {
@@ -480,23 +596,6 @@ func cloneInt(value *int) *int {
 	}
 	copy := *value
 	return &copy
-}
-
-func nonNegativeCount(value float64) int {
-	if !finite(value) || value <= 0 {
-		return 0
-	}
-	return int(math.Round(value))
-}
-
-func clamp(value, minimum, maximum float64) float64 {
-	if value < minimum {
-		return minimum
-	}
-	if value > maximum {
-		return maximum
-	}
-	return value
 }
 
 func finite(value float64) bool {

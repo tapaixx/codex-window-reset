@@ -150,6 +150,21 @@ func testAccount(key, authIndex string) accounts.Account {
 	return accounts.Account{Key: key, AuthIndex: authIndex}
 }
 
+type failingUpdateRepository struct {
+	state      domain.RuntimeState
+	updateErr  error
+	updateCall int
+}
+
+func (r *failingUpdateRepository) Load() (domain.RuntimeState, error) {
+	return r.state, nil
+}
+
+func (r *failingUpdateRepository) Update(func(*domain.RuntimeState) error) error {
+	r.updateCall++
+	return r.updateErr
+}
+
 func requestCount(h *quotaTestHost) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -618,6 +633,71 @@ func TestQuotaRefreshKeepsEmbeddedCreditsPartialWhenDetailFails(t *testing.T) {
 	}
 	if got.ResetApplicableCount == nil || *got.ResetApplicableCount != 2 {
 		t.Fatalf("embedded partial count = %#v", got.ResetApplicableCount)
+	}
+}
+
+func TestQuotaRefreshKeepsEmbeddedResetInfoPartialForMalformedDedicatedResponses(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed json", body: `{"available_count":`},
+		{name: "null count", body: `{"available_count":null}`},
+		{name: "wrong typed count", body: `{"available_count":"two"}`},
+		{name: "null credit list", body: `{"credits":null}`},
+		{name: "wrong typed credit list", body: `{"credits":{}}`},
+		{name: "malformed credit item", body: `{"credits":[null]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newQuotaHost(now)
+			h.responses[quotaResetCreditsURL] = host.HTTPResponse{StatusCode: 200, Body: []byte(tt.body)}
+			s := New(h, store.NewRuntimeStateRepository(t.TempDir()), &quotaClock{now: now})
+
+			got, err := s.Refresh(context.Background(), testAccount("acct-one", "auth-one"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ResetInfoComplete {
+				t.Fatal("malformed dedicated reset info was marked complete")
+			}
+			if got.ResetApplicableCount == nil || *got.ResetApplicableCount != 2 {
+				t.Fatalf("embedded partial count = %#v, want 2", got.ResetApplicableCount)
+			}
+		})
+	}
+}
+
+func TestQuotaEvaluateKeepsLoadedHoldWhenClearingUpdateFails(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	account := testAccount("acct-one", "auth-one")
+	cfg := domain.DefaultConfig()
+	repo := &failingUpdateRepository{
+		state: domain.RuntimeState{
+			GuardrailHolds: map[string]domain.GuardrailHold{
+				account.Key: {
+					AccountKey:    account.Key,
+					EstablishedAt: now.Add(-time.Hour),
+					FloorPercent:  cfg.LongWindowFloorPercent,
+				},
+			},
+		},
+		updateErr: errors.New("persisted hold update failed"),
+	}
+	s := New(newQuotaHost(now), repo, &quotaClock{now: now})
+	if _, err := s.Refresh(context.Background(), account); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionGuardrailHold {
+		t.Fatalf("decision = %q, want %q after failed hold clearing update", got, domain.DecisionGuardrailHold)
+	}
+	if repo.updateCall != 1 {
+		t.Fatalf("repository Update calls = %d, want one", repo.updateCall)
+	}
+	if _, ok := repo.state.GuardrailHolds[account.Key]; !ok {
+		t.Fatal("loaded persisted hold disappeared after failed update")
 	}
 }
 

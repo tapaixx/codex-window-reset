@@ -189,3 +189,110 @@ Commit message:
 ```text
 feat: add quota snapshots and persistent guardrails
 ```
+
+## Fix round 1
+
+Fixed the three open Important findings:
+
+- Usage and remaining values are validated in the inclusive 0–100 range;
+  invalid recognized windows reject the usage payload instead of being
+  clamped into an actionable snapshot.
+- Dedicated reset-credit responses are structurally validated. Count fields
+  must be numeric, integral, and non-negative; credit fields must be lists of
+  structurally valid credit objects. Malformed, null, and wrong-typed detail
+  responses leave embedded usage counts partial and never set
+  `ResetInfoComplete`.
+- Hold transitions retain the loaded persisted hold when clearing fails, and
+  any runtime-state repository error now fails closed as `guardrail_hold`.
+
+Regression tests added:
+
+- `TestParseUsageRejectsInvalidUsageAndRemainingRanges`
+- `TestQuotaRefreshKeepsEmbeddedResetInfoPartialForMalformedDedicatedResponses`
+- `TestQuotaEvaluateKeepsLoadedHoldWhenClearingUpdateFails`
+
+The required red run was:
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test ./internal/quota -v
+```
+
+It failed for the intended pre-fix reasons:
+
+```text
+TestParseUsageRejectsInvalidUsageAndRemainingRanges: ParseUsage accepted an out-of-range usage value
+TestQuotaRefreshKeepsEmbeddedResetInfoPartialForMalformedDedicatedResponses: malformed dedicated reset info was marked complete
+TestQuotaEvaluateKeepsLoadedHoldWhenClearingUpdateFails: decision = "sufficient_window", want "guardrail_hold"
+FAIL
+```
+
+The focused green run was:
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test -count=1 ./internal/quota -v
+```
+
+Output:
+
+```text
+--- PASS: TestParseUsageRejectsInvalidUsageAndRemainingRanges
+--- PASS: TestQuotaRefreshKeepsEmbeddedResetInfoPartialForMalformedDedicatedResponses
+--- PASS: TestQuotaEvaluateKeepsLoadedHoldWhenClearingUpdateFails
+PASS
+ok  github.com/tapaixx/codex-window-reset/internal/quota 0.061s
+```
+
+Broader verification:
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test -count=1 ./...
+```
+
+Output:
+
+```text
+?    github.com/tapaixx/codex-window-reset [no test files]
+ok   github.com/tapaixx/codex-window-reset/internal/accounts 0.008s
+ok   github.com/tapaixx/codex-window-reset/internal/domain 0.011s
+ok   github.com/tapaixx/codex-window-reset/internal/host 0.008s
+ok   github.com/tapaixx/codex-window-reset/internal/probe 0.015s
+ok   github.com/tapaixx/codex-window-reset/internal/quota 0.100s
+ok   github.com/tapaixx/codex-window-reset/internal/schedule 0.134s
+ok   github.com/tapaixx/codex-window-reset/internal/simulate 0.025s
+ok   github.com/tapaixx/codex-window-reset/internal/store 0.306s
+```
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go vet ./...
+```
+
+Output: exit 0 with no diagnostics.
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test -race ./...
+```
+
+Output: exit 0; all eight tested packages passed, including
+`internal/quota` in 1.087s.
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 gofmt -d internal/quota/parse.go internal/quota/service.go internal/quota/parse_test.go internal/quota/service_test.go
+```
+
+Output: empty; no formatting diff.
+
+```text
+git diff --check && git diff --stat
+```
+
+Output:
+
+```text
+ internal/quota/parse.go        | 175 ++++++++++++++++++++++++++++++++---------
+ internal/quota/parse_test.go   |  20 +++++
+ internal/quota/service.go      |  25 +++---
+ internal/quota/service_test.go |  80 +++++++++++++++++++
+ 4 files changed, 250 insertions(+), 50 deletions(-)
+```
+
+No material concerns were found in this fix round.
