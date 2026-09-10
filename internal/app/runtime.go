@@ -33,16 +33,17 @@ type Dependencies struct {
 // Runtime is the sole owner of mutable application orchestration state.  In
 // particular, the busy registry and bulk run state are never package globals.
 type Runtime struct {
-	mu        sync.RWMutex
-	deps      Dependencies
-	config    domain.Config
-	run       *runState
-	busy      map[string]struct{}
-	stop      chan struct{}
-	wg        sync.WaitGroup
-	stopOnce  sync.Once
-	stopped   bool
-	scheduler *schedule.Scheduler
+	mu           sync.RWMutex
+	deps         Dependencies
+	config       domain.Config
+	run          *runState
+	busy         map[string]struct{}
+	resetFlights map[string]*resetFlight
+	stop         chan struct{}
+	wg           sync.WaitGroup
+	stopOnce     sync.Once
+	stopped      bool
+	scheduler    *schedule.Scheduler
 
 	// storeErrorCode is intentionally only a code.  Repository errors may
 	// contain filesystem details and must not cross the management boundary.
@@ -111,10 +112,11 @@ func New(deps Dependencies) (*Runtime, error) {
 
 	config, err := deps.Config.Load()
 	runtime := &Runtime{
-		deps:   deps,
-		config: cloneConfig(config),
-		busy:   make(map[string]struct{}),
-		stop:   make(chan struct{}),
+		deps:         deps,
+		config:       cloneConfig(config),
+		busy:         make(map[string]struct{}),
+		resetFlights: make(map[string]*resetFlight),
+		stop:         make(chan struct{}),
 	}
 	planner := deps.Planner
 	if planner == nil {
@@ -236,6 +238,11 @@ func (r *Runtime) Start() {
 	scheduler := r.scheduler
 	config := cloneConfig(r.config)
 	r.mu.RUnlock()
+	if r.deps.Audit != nil {
+		if err := r.deps.Audit.RecoverPending(r.now()); err != nil {
+			r.setStoreError(err)
+		}
+	}
 	if scheduler == nil {
 		return
 	}
