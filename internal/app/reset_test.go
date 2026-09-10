@@ -201,6 +201,54 @@ func TestResetSameKeyWaitsForCurrentFlightAndReloadsFinalRecord(t *testing.T) {
 	}
 }
 
+func TestResetSameKeyWaitCancellationReturnsStableBusyError(t *testing.T) {
+	fx := newResetFixture(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	fx.quota.BeforeConsume = func(context.Context) error {
+		close(entered)
+		<-release
+		return nil
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := fx.runtime.ResetQuota(context.Background(), "acct-a", resetKeyA)
+		firstDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first reset did not reach consume")
+	}
+
+	waitCtx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := fx.runtime.ResetQuota(waitCtx, "acct-a", resetKeyA)
+		secondDone <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-secondDone:
+		var domainErr *domain.Error
+		if !errors.As(err, &domainErr) {
+			t.Fatalf("same-key cancellation error = %T %v, want *domain.Error", err, err)
+		}
+		if domainErr.Code != domain.CodeAccountBusy || domainErr.HTTPStatus != 409 || !domainErr.Retryable || domainErr.Message == "" {
+			t.Fatalf("same-key cancellation domain error = %#v", domainErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("same-key waiter did not return after cancellation")
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResetRefreshesAfterSuccessfulAndDefiniteFailedConsume(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -324,22 +372,40 @@ func TestResetProcessStopBeforeConsumeIsRecoveredWithoutRetry(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("reset did not stop between append and consume")
 	}
-	fx.runtime.Stop()
+	stopDone := make(chan struct{})
+	go func() {
+		fx.runtime.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("runtime stop returned while reset consume was blocked")
+	case <-time.After(25 * time.Millisecond):
+	}
 
-	reconstructed := newResetRuntime(t, fx)
-	reconstructed.Start()
 	close(stopBeforeConsume)
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime stop did not drain the blocked reset")
+	}
 	if err := <-firstDone; err == nil || domain.CodeOf(err) != domain.CodeResetOutcomeUnknown {
 		t.Fatalf("stopped reset error = %v", err)
 	}
+	if got := fx.quota.ResetCalls(); got != 1 {
+		t.Fatalf("reset calls after stop = %d, want 1", got)
+	}
+
+	reconstructed := newResetRuntime(t, fx)
+	reconstructed.Start()
 	defer reconstructed.Stop()
 
 	recovered, err := reconstructed.ResetQuota(context.Background(), "acct-a", resetKeyA)
 	if err != nil || recovered.Outcome != domain.ResetUnknown {
 		t.Fatalf("replay = %#v, err=%v", recovered, err)
 	}
-	if got := fx.quota.ResetCalls(); got != 0 {
-		t.Fatalf("reset calls = %d, want 0", got)
+	if got := fx.quota.ResetCalls(); got != 1 {
+		t.Fatalf("reset calls = %d, want 1", got)
 	}
 }
 
@@ -433,6 +499,9 @@ func (q *resetQuotaFixture) Reset(ctx context.Context, _ accounts.Account, _ str
 	}
 	if beforeConsume != nil {
 		if err := beforeConsume(ctx); err != nil {
+			q.mu.Lock()
+			q.resetCalls++
+			q.mu.Unlock()
 			return result, err
 		}
 	}

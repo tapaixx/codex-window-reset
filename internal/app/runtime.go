@@ -40,6 +40,9 @@ type Runtime struct {
 	busy         map[string]struct{}
 	resetFlights map[string]*resetFlight
 	stop         chan struct{}
+	stopCtx      context.Context
+	stopCancel   context.CancelFunc
+	resetGate    sync.RWMutex
 	wg           sync.WaitGroup
 	stopOnce     sync.Once
 	stopped      bool
@@ -111,12 +114,15 @@ func New(deps Dependencies) (*Runtime, error) {
 	}
 
 	config, err := deps.Config.Load()
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	runtime := &Runtime{
 		deps:         deps,
 		config:       cloneConfig(config),
 		busy:         make(map[string]struct{}),
 		resetFlights: make(map[string]*resetFlight),
 		stop:         make(chan struct{}),
+		stopCtx:      stopCtx,
+		stopCancel:   stopCancel,
 	}
 	planner := deps.Planner
 	if planner == nil {
@@ -259,10 +265,12 @@ func (r *Runtime) Stop() {
 		return
 	}
 	var cancel context.CancelFunc
+	var stopCancel context.CancelFunc
 	r.stopOnce.Do(func() {
 		r.mu.Lock()
 		r.stopped = true
 		close(r.stop)
+		stopCancel = r.stopCancel
 		if r.run != nil {
 			cancel = r.run.cancel
 		}
@@ -270,9 +278,17 @@ func (r *Runtime) Stop() {
 		if cancel != nil {
 			cancel()
 		}
+		if stopCancel != nil {
+			stopCancel()
+		}
 		if r.scheduler != nil {
 			r.scheduler.Stop()
 		}
+		// A reset that already passed the consume gate may finish against the
+		// canceled context, but a reset that has not passed it must not issue
+		// an upstream consume after shutdown begins.
+		r.resetGate.Lock()
+		r.resetGate.Unlock()
 	})
 	r.wg.Wait()
 }

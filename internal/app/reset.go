@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tapaixx/codex-window-reset/internal/accounts"
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 )
 
@@ -14,6 +15,9 @@ var canonicalResetUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a
 type resetFlight struct {
 	accountKey string
 	done       chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+	stopAfter  func() bool
 	audit      domain.ResetAudit
 	err        error
 }
@@ -76,7 +80,7 @@ func (r *Runtime) ResetQuota(ctx context.Context, accountKey, idempotencyKey str
 		return domain.ResetAudit{}, appError(domain.CodeAccountUnavailable, 409, true, "account is unavailable")
 	}
 
-	flight, started := r.beginResetFlight(accountKey, idempotencyKey)
+	flight, started := r.beginResetFlight(ctx, accountKey, idempotencyKey)
 	if !started {
 		if flight != nil {
 			if flight.accountKey != accountKey {
@@ -90,7 +94,7 @@ func (r *Runtime) ResetQuota(ctx context.Context, accountKey, idempotencyKey str
 		r.finishResetFlight(idempotencyKey, audit, err)
 	}()
 
-	snapshot, refreshErr := r.deps.Quota.Refresh(ctx, account)
+	snapshot, refreshErr := r.deps.Quota.Refresh(flight.ctx, account)
 	if refreshErr != nil {
 		return domain.ResetAudit{}, appError(domain.CodeQuotaRefreshFailed, 502, true, "quota refresh failed")
 	}
@@ -113,10 +117,15 @@ func (r *Runtime) ResetQuota(ctx context.Context, accountKey, idempotencyKey str
 		return r.handlePendingAppendConflict(accountKey, idempotencyKey, appendErr)
 	}
 
-	result, callErr := r.deps.Quota.Reset(ctx, account, idempotencyKey)
+	result, callErr, entered := r.resetConsume(flight, account, idempotencyKey)
+	if !entered {
+		audit = pending
+		err = resetOutcomeUnknownError()
+		return audit, err
+	}
 	// The refresh is deliberately unconditional after entering the upstream
 	// consume primitive, including definite HTTP failures.
-	_, _ = r.deps.Quota.Refresh(ctx, account)
+	_, _ = r.deps.Quota.Refresh(flight.ctx, account)
 
 	audit = pending
 	audit.FinishedAt = r.now()
@@ -152,7 +161,7 @@ func (r *Runtime) resetFlightFor(idempotencyKey string) *resetFlight {
 	return flight
 }
 
-func (r *Runtime) beginResetFlight(accountKey, idempotencyKey string) (*resetFlight, bool) {
+func (r *Runtime) beginResetFlight(ctx context.Context, accountKey, idempotencyKey string) (*resetFlight, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if flight := r.resetFlights[idempotencyKey]; flight != nil {
@@ -164,16 +173,30 @@ func (r *Runtime) beginResetFlight(accountKey, idempotencyKey string) (*resetFli
 	if _, busy := r.busy[accountKey]; busy {
 		return nil, false
 	}
-	flight := &resetFlight{accountKey: accountKey, done: make(chan struct{})}
+	flightCtx, cancel := context.WithCancel(ctx)
+	var stopAfter func() bool
+	if r.stopCtx != nil {
+		stopAfter = context.AfterFunc(r.stopCtx, cancel)
+	}
+	flight := &resetFlight{
+		accountKey: accountKey,
+		done:       make(chan struct{}),
+		ctx:        flightCtx,
+		cancel:     cancel,
+		stopAfter:  stopAfter,
+	}
 	r.busy[accountKey] = struct{}{}
 	if r.resetFlights == nil {
 		r.resetFlights = make(map[string]*resetFlight)
 	}
 	r.resetFlights[idempotencyKey] = flight
+	r.wg.Add(1)
 	return flight, true
 }
 
 func (r *Runtime) finishResetFlight(idempotencyKey string, audit domain.ResetAudit, err error) {
+	var cancel context.CancelFunc
+	var stopAfter func() bool
 	r.mu.Lock()
 	flight := r.resetFlights[idempotencyKey]
 	if flight == nil {
@@ -182,10 +205,19 @@ func (r *Runtime) finishResetFlight(idempotencyKey string, audit domain.ResetAud
 	}
 	flight.audit = audit
 	flight.err = err
+	cancel = flight.cancel
+	stopAfter = flight.stopAfter
 	delete(r.resetFlights, idempotencyKey)
 	delete(r.busy, flight.accountKey)
 	close(flight.done)
 	r.mu.Unlock()
+	if stopAfter != nil {
+		stopAfter()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	r.wg.Done()
 }
 
 func (r *Runtime) waitResetFlight(ctx context.Context, idempotencyKey string, flight *resetFlight) (domain.ResetAudit, error) {
@@ -204,8 +236,21 @@ func (r *Runtime) waitResetFlight(ctx context.Context, idempotencyKey string, fl
 		}
 		return flight.audit, flight.err
 	case <-ctx.Done():
-		return domain.ResetAudit{}, ctx.Err()
+		return domain.ResetAudit{}, resetWaitCanceledError()
 	}
+}
+
+func (r *Runtime) resetConsume(flight *resetFlight, account accounts.Account, idempotencyKey string) (domain.ResetHTTPResult, error, bool) {
+	r.resetGate.RLock()
+	defer r.resetGate.RUnlock()
+	r.mu.RLock()
+	stopped := r.stopped
+	r.mu.RUnlock()
+	if stopped || flight.ctx.Err() != nil {
+		return domain.ResetHTTPResult{}, resetOutcomeUnknownError(), false
+	}
+	result, err := r.deps.Quota.Reset(flight.ctx, account, idempotencyKey)
+	return result, err, true
 }
 
 func (r *Runtime) handlePendingAppendConflict(accountKey, idempotencyKey string, appendErr error) (domain.ResetAudit, error) {
@@ -288,6 +333,10 @@ func idempotencyConflictError() error {
 
 func resetOutcomeUnknownError() error {
 	return appError(domain.CodeResetOutcomeUnknown, 503, true, "reset outcome is unknown")
+}
+
+func resetWaitCanceledError() error {
+	return appError(domain.CodeAccountBusy, 409, true, "reset is already in use")
 }
 
 func resetStoreError(err error) error {
