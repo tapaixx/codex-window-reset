@@ -52,11 +52,11 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 		}
 	}
 
-	baselineWindows := make([]timeInterval, 0, 1)
-	if len(work) > 0 {
+	baselineWindows := make([]timeInterval, 0, len(work))
+	for _, period := range work {
 		baselineWindows = append(baselineWindows, clipInterval(timeInterval{
-			start: work[0].start,
-			end:   work[0].start.Add(productivity),
+			start: period.start,
+			end:   period.start.Add(productivity),
 		}, dayStart, dayEnd))
 	}
 

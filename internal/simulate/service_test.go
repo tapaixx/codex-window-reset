@@ -69,6 +69,29 @@ func TestSimulationUsesPlannerInstantsAndProductivityAssumption(t *testing.T) {
 	task4AssertTimelineIsNonOverlappingAndWithinDay(t, got.TimelineSegments, date)
 }
 
+func TestSimulationComparesBaselineForEachWorkPeriod(t *testing.T) {
+	cfg := task4SimulationConfig(t)
+	cfg.WorkPeriods[1] = domain.LocalPeriod{Start: "13:30", End: "14:00"}
+	date := time.Date(2026, time.September, 14, 0, 0, 0, 0, time.FixedZone("operator", 8*60*60))
+
+	got, err := (Service{}).Run(cfg, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Baseline.AvailableCoverageMinutes != 90 {
+		t.Fatalf("baseline coverage = %d, want 90 across both work periods", got.Baseline.AvailableCoverageMinutes)
+	}
+	if got.Baseline.IdleWindowMinutes != 30 {
+		t.Fatalf("baseline idle = %d, want 30 across both work periods", got.Baseline.IdleWindowMinutes)
+	}
+	if got.Scheduled.AvailableCoverageMinutes != 80 {
+		t.Fatalf("scheduled coverage = %d, want 80", got.Scheduled.AvailableCoverageMinutes)
+	}
+	if got.NetGainMinutes != -10 {
+		t.Fatalf("net gain = %d, want -10 after comparing both work periods", got.NetGainMinutes)
+	}
+}
+
 func TestSimulationIgnoresSnapshotLikeFixtureChanges(t *testing.T) {
 	cfg := task4SimulationConfig(t)
 	date := time.Date(2026, time.September, 14, 0, 0, 0, 0, time.UTC)
