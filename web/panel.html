@@ -1,83 +1,223 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Codex Window Reset</title>
+    <meta name="resource-base-path" content="">
+    <meta name="resource_base_path" content="">
+    <title>Codex Window Reset | Operations</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Operations</p>
+      <div class="brand-lockup">
+        <p class="eyebrow">Operations console</p>
         <h1>Codex Window Reset</h1>
+        <p class="brand-subtitle">Account windows, schedule controls, and operation evidence</p>
       </div>
-      <div class="connection" id="connection" data-state="loading">Connecting</div>
+      <div class="topbar-actions">
+        <p class="connection" id="connection" data-state="loading" aria-live="polite">Connecting...</p>
+        <a class="host-login" id="host-login" href="/" hidden>Return to host login</a>
+      </div>
     </header>
 
-    <main class="shell" id="app" aria-live="polite">
-      <section class="summary" aria-labelledby="summary-title">
+    <main class="shell" id="main-content">
+      <section class="summary-section" aria-labelledby="summary-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Runtime</p>
-            <h2 id="summary-title">Status</h2>
+            <p class="eyebrow">At a glance</p>
+            <h2 id="summary-title">Runtime status</h2>
           </div>
-          <button class="button button-secondary" type="button" data-action="refresh">Refresh</button>
+          <button class="button button-secondary" type="button" data-action="refresh-panel">Refresh status</button>
         </div>
-        <div class="summary-grid" id="status-summary"></div>
+        <div class="summary-grid" id="status-summary" aria-label="Runtime summary">
+          <article class="summary-card" id="summary-schedule">
+            <span class="summary-label">Schedule</span>
+            <strong class="summary-value">-</strong>
+            <span class="summary-detail">Waiting for status</span>
+          </article>
+          <article class="summary-card" id="summary-accounts">
+            <span class="summary-label">Accounts</span>
+            <strong class="summary-value">-</strong>
+            <span class="summary-detail">Discovered</span>
+          </article>
+          <article class="summary-card" id="summary-quota">
+            <span class="summary-label">Quota snapshots</span>
+            <strong class="summary-value">-</strong>
+            <span class="summary-detail">Explicit refresh only</span>
+          </article>
+          <article class="summary-card" id="summary-run">
+            <span class="summary-label">Current run</span>
+            <strong class="summary-value">Idle</strong>
+            <span class="summary-detail">No active operation</span>
+          </article>
+          <article class="summary-card" id="summary-next">
+            <span class="summary-label">Next occurrence</span>
+            <strong class="summary-value">-</strong>
+            <span class="summary-detail">Not scheduled</span>
+          </article>
+        </div>
+        <p class="run-status" id="run-status" aria-live="polite">No operation is running.</p>
       </section>
 
-      <section class="workspace" aria-labelledby="accounts-title">
+      <section class="surface-section accounts-section" aria-labelledby="accounts-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Inventory</p>
+            <p class="eyebrow">Inventory and operations</p>
             <h2 id="accounts-title">Accounts</h2>
           </div>
-          <button class="button" type="button" data-action="probe">Run Probe</button>
+          <span class="selection-count" id="selection-count" aria-live="polite">0 selected</span>
         </div>
-        <div class="table-wrap">
-          <table>
+        <div class="disclosure-grid">
+          <p class="disclosure" id="probe-disclosure"><strong>Health Probe:</strong> A real Codex request may consume ordinary quota or begin a Short Window.</p>
+          <p class="disclosure" id="preheat-disclosure"><strong>Preheat:</strong> A real Codex request may consume ordinary quota or begin a Short Window.</p>
+        </div>
+        <div class="operation-toolbar" aria-label="Account operations">
+          <label class="acknowledgement" for="probe-acknowledgement">
+            <input id="probe-acknowledgement" type="checkbox">
+            <span>I acknowledge the quota effect before a manual probe.</span>
+          </label>
+          <div class="button-row">
+            <button class="button button-secondary" type="button" data-action="refresh-quota">Refresh selected quota</button>
+            <button class="button button-secondary" type="button" data-action="run-probe">Run health probe</button>
+            <button class="button button-danger" type="button" data-action="open-reset">Reset one account</button>
+          </div>
+        </div>
+        <p class="inline-feedback" id="account-feedback" role="alert" aria-live="polite"></p>
+        <div class="table-scroll">
+          <table class="account-table">
+            <caption class="sr-only">Account health, schedule membership, quota snapshots, and latest outcomes</caption>
             <thead>
               <tr>
                 <th scope="col">Account</th>
                 <th scope="col">Plan</th>
-                <th scope="col">State</th>
+                <th scope="col">Health</th>
                 <th scope="col">Scheduled</th>
+                <th scope="col">Short window</th>
+                <th scope="col">Long window</th>
+                <th scope="col">Reset credits</th>
+                <th scope="col">Next occurrence</th>
+                <th scope="col">Request Outcome</th>
+                <th scope="col">Window Outcome</th>
+                <th scope="col">HTTP / latency</th>
+                <th scope="col">Capture</th>
+                <th scope="col">Error</th>
               </tr>
             </thead>
-            <tbody id="accounts-table"></tbody>
+            <tbody id="accounts-table" data-identity-state="masked"></tbody>
           </table>
         </div>
       </section>
 
-      <section class="workspace" aria-labelledby="schedule-title">
-        <div class="section-heading">
+      <section class="workspace-section" aria-labelledby="workspace-title">
+        <div class="section-heading workspace-heading">
           <div>
-            <p class="eyebrow">Configuration</p>
-            <h2 id="schedule-title">Schedule</h2>
-          </div>
-          <div class="button-row">
-            <button class="button button-secondary" type="button" data-action="simulate">Simulate</button>
-            <button class="button" type="button" data-action="save">Save</button>
+            <p class="eyebrow">Task workspace</p>
+            <h2 id="workspace-title">Manage the operating window</h2>
           </div>
         </div>
-        <div class="schedule-grid" id="schedule-form"></div>
-      </section>
-
-      <section class="workspace" aria-labelledby="history-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Records</p>
-            <h2 id="history-title">History</h2>
-          </div>
-          <button class="button button-secondary" type="button" data-action="load-history">Load</button>
+        <div class="workspace-tabs" role="tablist" aria-label="Operations workspace">
+          <button class="tab-button is-active" type="button" role="tab" id="tab-schedule" aria-controls="panel-schedule" aria-selected="true" tabindex="0" data-workspace="schedule">Schedule</button>
+          <button class="tab-button" type="button" role="tab" id="tab-simulator" aria-controls="panel-simulator" aria-selected="false" tabindex="-1" data-workspace="simulator">Simulator</button>
+          <button class="tab-button" type="button" role="tab" id="tab-records" aria-controls="panel-records" aria-selected="false" tabindex="-1" data-workspace="records">History and audit</button>
         </div>
-        <div class="record-list" id="history-list"></div>
+
+        <section class="tab-panel" id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" data-panel="schedule">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Server revision <span id="schedule-revision">-</span></p>
+              <h3>Schedule configuration</h3>
+            </div>
+            <div class="button-row">
+              <button class="button button-secondary" type="button" data-action="restore-schedule">Restore server version</button>
+              <button class="button button-secondary" type="button" data-action="simulate">Simulate draft</button>
+              <button class="button" type="button" data-action="save-schedule">Save schedule</button>
+            </div>
+          </div>
+          <p class="inline-feedback" id="schedule-feedback" role="alert" aria-live="polite"></p>
+          <form id="schedule-form" novalidate></form>
+        </section>
+
+        <section class="tab-panel" id="panel-simulator" role="tabpanel" aria-labelledby="tab-simulator" data-panel="simulator" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Derived view</p>
+              <h3>24-hour simulator</h3>
+            </div>
+            <button class="button" type="button" data-action="simulate">Run simulation</button>
+          </div>
+          <p class="disclosure">Simulation is calculated from the draft configuration. Assumptions and observed quota are shown separately.</p>
+          <p class="inline-feedback" id="simulation-feedback" role="alert" aria-live="polite"></p>
+          <div id="simulation-output"></div>
+        </section>
+
+        <section class="tab-panel" id="panel-records" role="tabpanel" aria-labelledby="tab-records" data-panel="records" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Evidence</p>
+              <h3>Operation history and reset audit</h3>
+            </div>
+            <div class="button-row">
+              <button class="button button-secondary" type="button" data-action="load-records">Load latest records</button>
+              <button class="button button-secondary" type="button" data-action="clear-history">Clear history</button>
+              <button class="button button-danger" type="button" data-action="open-audit-clear">Clear reset audit</button>
+            </div>
+          </div>
+          <p class="inline-feedback" id="records-feedback" role="alert" aria-live="polite"></p>
+          <section class="record-section" aria-labelledby="history-section-title">
+            <h4 id="history-section-title">Latest 100 operations</h4>
+            <div id="history-output"></div>
+          </section>
+          <section class="record-section" aria-labelledby="audit-section-title">
+            <h4 id="audit-section-title">Reset Audit</h4>
+            <div id="audit-output"></div>
+          </section>
+        </section>
       </section>
 
-      <p class="feedback" id="feedback" role="status"></p>
+      <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
     </main>
+
+    <dialog id="reset-dialog" aria-labelledby="reset-dialog-title">
+      <form id="reset-form" method="dialog">
+        <div class="dialog-heading">
+          <p class="eyebrow">One-account action</p>
+          <h2 id="reset-dialog-title">Confirm quota reset</h2>
+        </div>
+        <dl class="dialog-details">
+          <div><dt>Account</dt><dd id="reset-account">-</dd></div>
+          <div><dt>Applicable credits</dt><dd id="reset-credits">-</dd></div>
+        </dl>
+        <p class="disclosure">This is a real Codex request. It may consume ordinary quota or begin a Short Window.</p>
+        <p class="dialog-status" id="reset-status" role="status" aria-live="polite"></p>
+        <p class="inline-feedback" id="reset-feedback" role="alert" aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-action="close-reset">Cancel</button>
+          <button class="button button-danger" id="reset-confirm" type="submit">Confirm reset</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="audit-dialog" aria-labelledby="audit-dialog-title">
+      <form id="audit-form" method="dialog">
+        <div class="dialog-heading">
+          <p class="eyebrow">Destructive action</p>
+          <h2 id="audit-dialog-title">Clear Reset Audit</h2>
+        </div>
+        <p>This removes stored reset evidence. Type <strong>DELETE AUDIT</strong> to continue.</p>
+        <div class="field">
+          <label for="audit-confirmation">Confirmation phrase</label>
+          <input id="audit-confirmation" name="audit_confirmation" type="text" autocomplete="off" required>
+        </div>
+        <p class="inline-feedback" id="audit-feedback" role="alert" aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-action="close-audit">Cancel</button>
+          <button class="button button-danger" type="submit">Delete audit</button>
+        </div>
+      </form>
+    </dialog>
 
     <script type="module" src="./modules/main.js"></script>
   </body>
