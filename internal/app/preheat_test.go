@@ -118,6 +118,7 @@ func TestPreheatCompensationOnlyForEligibleAutomaticFailures(t *testing.T) {
 		{name: "validation", result: domain.ProbeResult{Outcome: domain.RequestResponseError}, wantDue: false},
 		{name: "unexpected output", result: domain.ProbeResult{Outcome: domain.RequestUnexpectedOutput}, wantDue: false},
 		{name: "success unverified", result: domain.ProbeResult{Outcome: domain.RequestSucceeded}, wantDue: false},
+		{name: "success with rate limit status", result: domain.ProbeResult{Outcome: domain.RequestSucceeded, HTTPStatus: 429}, wantDue: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

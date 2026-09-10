@@ -2,6 +2,7 @@ package schedule
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -92,13 +93,20 @@ func (c *schedulerTestClock) Advance(delta time.Duration) {
 }
 
 type schedulerTestStateRepository struct {
-	mu    sync.Mutex
-	state domain.RuntimeState
+	mu           sync.Mutex
+	state        domain.RuntimeState
+	updateErrors []error
+	loadErrors   []error
 }
 
 func (r *schedulerTestStateRepository) Load() (domain.RuntimeState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.loadErrors) > 0 {
+		err := r.loadErrors[0]
+		r.loadErrors = r.loadErrors[1:]
+		return domain.RuntimeState{}, err
+	}
 	return cloneSchedulerState(r.state), nil
 }
 
@@ -112,6 +120,11 @@ func (r *schedulerTestStateRepository) Save(state domain.RuntimeState) error {
 func (r *schedulerTestStateRepository) Update(mutate func(*domain.RuntimeState) error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.updateErrors) > 0 {
+		err := r.updateErrors[0]
+		r.updateErrors = r.updateErrors[1:]
+		return err
+	}
 	state := cloneSchedulerState(r.state)
 	if err := mutate(&state); err != nil {
 		return err
@@ -124,6 +137,18 @@ func (r *schedulerTestStateRepository) saved() domain.RuntimeState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return cloneSchedulerState(r.state)
+}
+
+func (r *schedulerTestStateRepository) FailNextLoad(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.loadErrors = append(r.loadErrors, err)
+}
+
+func (r *schedulerTestStateRepository) FailNextUpdate(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.updateErrors = append(r.updateErrors, err)
 }
 
 func cloneSchedulerState(state domain.RuntimeState) domain.RuntimeState {
@@ -144,26 +169,47 @@ func cloneSchedulerState(state domain.RuntimeState) domain.RuntimeState {
 }
 
 type schedulerTestPlanner struct {
-	mu    sync.Mutex
-	plans map[string][]domain.PlannedOccurrence
-	calls int
+	mu           sync.Mutex
+	plans        map[string][]domain.PlannedOccurrence
+	errors       map[string]error
+	calls        int
+	blockedDate  string
+	blocked      chan struct{}
+	blockRelease <-chan struct{}
 }
 
 func (p *schedulerTestPlanner) PlanDay(_ domain.Config, date time.Time) ([]domain.PlannedOccurrence, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.calls++
 	dateKey := date.Format("2006-01-02")
-	return append([]domain.PlannedOccurrence(nil), p.plans[dateKey]...), nil
+	plans := append([]domain.PlannedOccurrence(nil), p.plans[dateKey]...)
+	err := p.errors[dateKey]
+	blocked := p.blockedDate == dateKey
+	entered, release := p.blocked, p.blockRelease
+	p.mu.Unlock()
+	if blocked {
+		if entered != nil {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+		}
+		if release != nil {
+			<-release
+		}
+	}
+	return plans, err
 }
 
 type schedulerTestExecutor struct {
 	mu                sync.Mutex
 	calls             []domain.PlannedOccurrence
+	observedErrors    []error
 	results           []domain.OperationRecord
 	entered           chan struct{}
 	onCall            func(domain.PlannedOccurrence)
 	onCallDone        chan struct{}
+	returnGate        chan struct{}
 	allowCompensation bool
 }
 
@@ -198,7 +244,16 @@ func (e *schedulerTestExecutor) ExecutePreheat(_ context.Context, occurrence dom
 		default:
 		}
 	}
+	if e.returnGate != nil {
+		<-e.returnGate
+	}
 	return record
+}
+
+func (e *schedulerTestExecutor) ReportSchedulerError(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.observedErrors = append(e.observedErrors, err)
 }
 
 func (e *schedulerTestExecutor) CompensationEligible(context.Context, domain.PlannedOccurrence) bool {
@@ -211,6 +266,12 @@ func (e *schedulerTestExecutor) Calls() []domain.PlannedOccurrence {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]domain.PlannedOccurrence(nil), e.calls...)
+}
+
+func (e *schedulerTestExecutor) Errors() []error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]error(nil), e.observedErrors...)
 }
 
 func schedulerTestConfig() domain.Config {
@@ -266,6 +327,186 @@ func TestFutureOccurrenceFiresExactlyOnce(t *testing.T) {
 	got := fx.states.saved().Occurrences[occurrence.ID]
 	if got.Status != domain.OccurrenceSucceeded {
 		t.Fatalf("status=%s, want succeeded", got.Status)
+	}
+}
+
+func TestReconcileRefreshesChangedPlannerOutputAndReplacesTimer(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	oldPlan := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Hour), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
+	}
+	newPlan := oldPlan
+	newPlan.PlannedAt = now.Add(3 * time.Hour)
+	newPlan.WindowStart = now.Add(2 * time.Hour)
+	newPlan.WindowEnd = now.Add(4 * time.Hour)
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[oldPlan.LocalDate] = []domain.PlannedOccurrence{oldPlan}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.states.saved().Occurrences[oldPlan.ID].PlannedAt; !got.Equal(oldPlan.PlannedAt) {
+		t.Fatalf("initial planned_at=%s, want %s", got, oldPlan.PlannedAt)
+	}
+
+	fx.planner.plans[oldPlan.LocalDate] = []domain.PlannedOccurrence{newPlan}
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	saved := fx.states.saved()
+	if got := saved.Occurrences[newPlan.ID].PlannedAt; !got.Equal(newPlan.PlannedAt) {
+		t.Fatalf("refreshed planned_at=%s, want %s", got, newPlan.PlannedAt)
+	}
+	if got := saved.NextRuns[newPlan.ID]; !got.Equal(newPlan.PlannedAt) {
+		t.Fatalf("refreshed next_run=%s, want %s", got, newPlan.PlannedAt)
+	}
+
+	fx.clock.Advance(time.Hour)
+	if got := len(fx.executor.Calls()); got != 0 {
+		t.Fatalf("stale timer executed %d operations", got)
+	}
+	fx.clock.Advance(2 * time.Hour)
+	select {
+	case <-fx.executor.entered:
+	case <-time.After(time.Second):
+		t.Fatalf("refreshed timer did not execute; calls=%#v", fx.executor.Calls())
+	}
+	calls := fx.executor.Calls()
+	if len(calls) != 1 || !calls[0].PlannedAt.Equal(newPlan.PlannedAt) {
+		t.Fatalf("calls=%#v, want one call for refreshed plan %#v", calls, newPlan)
+	}
+}
+
+func TestReconcileReplacesMidnightTimerWhenTimezoneChanges(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	utc := schedulerTestConfig()
+	if err := fx.scheduler.Reconcile(utc); err != nil {
+		t.Fatal(err)
+	}
+	if !schedulerClockHasActiveTimer(fx.clock, schedulerInstant("2026-09-10T00:00:00Z")) {
+		t.Fatalf("initial UTC midnight timer was not installed")
+	}
+
+	pacific := utc
+	pacific.Timezone = "America/Los_Angeles"
+	if err := fx.scheduler.Reconcile(pacific); err != nil {
+		t.Fatal(err)
+	}
+	if !schedulerClockHasActiveTimer(fx.clock, schedulerInstant("2026-09-09T07:00:00Z")) {
+		t.Fatalf("midnight timer was not replaced for new timezone")
+	}
+}
+
+func TestQueuedCallbackAfterStopDoesNotExecute(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	occurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Hour), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
+	}
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+	fx.scheduler.Start()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fx.scheduler.Stop()
+	fx.clock.Advance(time.Hour)
+
+	// Model a timer callback already queued at the ownership boundary after
+	// Stop returned. The handler must fence it before any executor I/O.
+	fx.scheduler.handle(schedulerCommand{kind: commandOccurrence, id: occurrence.ID})
+	if got := len(fx.executor.Calls()); got != 0 {
+		t.Fatalf("queued callback executed %d operations after Stop", got)
+	}
+}
+
+func TestSchedulerReportsOccurrencePersistenceAndReconcileFailures(t *testing.T) {
+	t.Run("claim", func(t *testing.T) {
+		now := schedulerInstant("2026-09-09T06:30:00Z")
+		occurrence := domain.PlannedOccurrence{ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PlannedAt: now.Add(time.Minute)}
+		fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+		fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+		fx.scheduler.Start()
+		defer fx.scheduler.Stop()
+		if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+			t.Fatal(err)
+		}
+		fx.states.FailNextUpdate(errors.New("claim persistence failed"))
+		fx.clock.Advance(time.Minute)
+		waitForSchedulerError(t, fx.executor)
+		if got := len(fx.executor.Calls()); got != 0 {
+			t.Fatalf("executor calls=%d after failed claim", got)
+		}
+	})
+
+	t.Run("terminal", func(t *testing.T) {
+		now := schedulerInstant("2026-09-09T06:30:00Z")
+		occurrence := domain.PlannedOccurrence{ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PlannedAt: now.Add(time.Minute)}
+		fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+		fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+		fx.executor.returnGate = make(chan struct{})
+		fx.scheduler.Start()
+		defer fx.scheduler.Stop()
+		if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+			t.Fatal(err)
+		}
+		fx.clock.Advance(time.Minute)
+		select {
+		case <-fx.executor.entered:
+		case <-time.After(time.Second):
+			t.Fatal("occurrence did not claim")
+		}
+		fx.states.FailNextUpdate(errors.New("terminal persistence failed"))
+		close(fx.executor.returnGate)
+		waitForSchedulerError(t, fx.executor)
+	})
+
+	t.Run("post-callback reconcile", func(t *testing.T) {
+		now := schedulerInstant("2026-09-09T06:30:00Z")
+		occurrence := domain.PlannedOccurrence{ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PlannedAt: now.Add(time.Minute)}
+		fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+		fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+		fx.scheduler.Start()
+		defer fx.scheduler.Stop()
+		if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+			t.Fatal(err)
+		}
+		fx.planner.mu.Lock()
+		fx.planner.errors[occurrence.LocalDate] = errors.New("reconciliation failed")
+		fx.planner.mu.Unlock()
+		fx.clock.Advance(time.Minute)
+		waitForSchedulerError(t, fx.executor)
+	})
+}
+
+func TestSchedulerReportsCompensationLoadFailure(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	id := "2026-09-09/p0/a"
+	due := now.Add(time.Minute)
+	occurrence := domain.PlannedOccurrence{ID: id, AccountKey: "a", LocalDate: "2026-09-09", PlannedAt: now.Add(-time.Hour)}
+	state := domain.RuntimeState{Occurrences: map[string]domain.OccurrenceState{
+		id: {PlannedOccurrence: occurrence, Status: domain.OccurrenceFailed, CompensationDueAt: due},
+	}}
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.states.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fx.states.FailNextLoad(errors.New("compensation load failed"))
+	fx.clock.Advance(time.Minute)
+	waitForSchedulerError(t, fx.executor)
+	if got := len(fx.executor.Calls()); got != 0 {
+		t.Fatalf("executor calls=%d after failed compensation load", got)
 	}
 }
 
@@ -332,13 +573,16 @@ func TestDisabledReconcileCancelsFutureTimersWithoutChangingSelectionHistory(t *
 
 func TestMidnightCallbackAdvancesPlanningHorizon(t *testing.T) {
 	now := schedulerInstant("2026-09-09T06:30:00Z")
-	occurrence := domain.PlannedOccurrence{ID: "2026-09-10/p0/a", AccountKey: "a", LocalDate: "2026-09-10", PlannedAt: now.Add(48 * time.Hour)}
+	occurrence := domain.PlannedOccurrence{ID: "2026-09-17/p0/a", AccountKey: "a", LocalDate: "2026-09-17", PlannedAt: now.Add(8 * 24 * time.Hour)}
 	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
-	fx.planner.plans["2026-09-10"] = []domain.PlannedOccurrence{occurrence}
+	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
 	fx.scheduler.Start()
 	defer fx.scheduler.Stop()
 	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
 		t.Fatal(err)
+	}
+	if _, ok := fx.states.saved().Occurrences[occurrence.ID]; ok {
+		t.Fatalf("occurrence outside initial horizon was planned early: %#v", fx.states.saved().Occurrences[occurrence.ID])
 	}
 	fx.clock.Advance(17*time.Hour + 30*time.Minute)
 	deadline := time.After(time.Second)
@@ -504,7 +748,10 @@ type schedulerFixture struct {
 func newSchedulerFixture(t *testing.T, now time.Time, state domain.RuntimeState) schedulerFixture {
 	t.Helper()
 	clock := newSchedulerTestClock(now)
-	planner := &schedulerTestPlanner{plans: make(map[string][]domain.PlannedOccurrence)}
+	planner := &schedulerTestPlanner{
+		plans:  make(map[string][]domain.PlannedOccurrence),
+		errors: make(map[string]error),
+	}
 	states := &schedulerTestStateRepository{state: cloneSchedulerState(state)}
 	executor := &schedulerTestExecutor{entered: make(chan struct{}, 8), allowCompensation: true}
 	scheduler := NewScheduler(clock, planner, states, executor)
@@ -562,6 +809,38 @@ func waitForClockTimer(t *testing.T, clock *schedulerTestClock, due time.Time) {
 		select {
 		case <-deadline:
 			t.Fatalf("compensation timer was not installed for %s", due)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func schedulerClockHasActiveTimer(clock *schedulerTestClock, due time.Time) bool {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	for _, timer := range clock.timers {
+		timer.mu.Lock()
+		active := !timer.stopped && timer.due.Equal(due)
+		timer.mu.Unlock()
+		if active {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForSchedulerError(t *testing.T, executor *schedulerTestExecutor) error {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		errors := executor.Errors()
+		if len(errors) > 0 {
+			return errors[0]
+		}
+		select {
+		case <-deadline:
+			t.Fatal("scheduler failure was not reported")
+			return nil
 		default:
 			time.Sleep(time.Millisecond)
 		}

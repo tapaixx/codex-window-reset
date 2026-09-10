@@ -309,12 +309,14 @@ func (r *Runtime) updateCompensation(occurrence domain.PlannedOccurrence, due ti
 }
 
 func compensable(result domain.ProbeResult) bool {
-	if result.HTTPStatus == 429 {
-		return true
-	}
 	switch result.Outcome {
 	case domain.RequestNetworkError, domain.RequestTimeout, domain.RequestRateLimited:
 		return true
+	case domain.RequestResponseError:
+		// A decoded 429 can still arrive with the generic response-error
+		// classification, but a successful response with the same status is
+		// never a compensation candidate.
+		return result.HTTPStatus == 429
 	case domain.RequestUpstreamError:
 		return result.HTTPStatus >= 500 && result.HTTPStatus <= 599
 	default:

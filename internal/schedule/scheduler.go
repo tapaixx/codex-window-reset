@@ -13,6 +13,7 @@ import (
 
 const (
 	schedulerHorizonDays = 7
+	schedulerRetryDelay  = time.Second
 	midnightTimerID      = "@schedule-midnight"
 	compensationPrefix   = "@compensation/"
 )
@@ -55,6 +56,13 @@ type CompensationExecutor interface {
 	ExecuteCompensation(context.Context, domain.PlannedOccurrence) domain.OperationRecord
 }
 
+// schedulerErrorObserver is intentionally unexported. Runtime implements the
+// narrow method so asynchronous timer failures become visible through its
+// management status without expanding the scheduler's public API.
+type schedulerErrorObserver interface {
+	ReportSchedulerError(error)
+}
+
 // Scheduler owns every timer and serializes all state transitions through one
 // goroutine. Reconciliation is event-driven: it runs on startup/config
 // changes, at local midnight, and after each occurrence callback. There is no
@@ -67,6 +75,7 @@ type Scheduler struct {
 
 	lifecycleMu sync.Mutex
 	started     bool
+	stopping    bool
 	stopped     bool
 	startErr    error
 	commands    chan schedulerCommand
@@ -74,18 +83,22 @@ type Scheduler struct {
 	done        chan struct{}
 	ctx         context.Context
 	cancel      context.CancelFunc
+	executionMu sync.Mutex
 
 	// timers is accessed only by the owner goroutine after Start. The
 	// lifecycle mutex protects cleanup that can happen concurrently with Stop.
-	timers map[string]domain.Timer
-	config domain.Config
+	timers          map[string]domain.Timer
+	timerDue        map[string]time.Time
+	timerGeneration map[string]uint64
+	config          domain.Config
 }
 
 type schedulerCommand struct {
-	kind   schedulerCommandKind
-	id     string
-	config domain.Config
-	result chan error
+	kind       schedulerCommandKind
+	id         string
+	generation uint64
+	config     domain.Config
+	result     chan error
 }
 
 type schedulerCommandKind uint8
@@ -105,11 +118,13 @@ func NewScheduler(clock domain.Clock, planner PlanSource, states RuntimeStateRep
 		clock = wallClock{}
 	}
 	return &Scheduler{
-		clock:   clock,
-		planner: planner,
-		states:  states,
-		exec:    executor,
-		timers:  make(map[string]domain.Timer),
+		clock:           clock,
+		planner:         planner,
+		states:          states,
+		exec:            executor,
+		timers:          make(map[string]domain.Timer),
+		timerDue:        make(map[string]time.Time),
+		timerGeneration: make(map[string]uint64),
 	}
 }
 
@@ -149,6 +164,9 @@ func (s *Scheduler) Start() {
 		s.lifecycleMu.Lock()
 		s.startErr = startErr
 		s.lifecycleMu.Unlock()
+		if startErr != nil {
+			s.reportError(fmt.Errorf("scheduler startup recovery: %w", startErr))
+		}
 	}
 
 	go s.ownerLoop()
@@ -160,16 +178,18 @@ func (s *Scheduler) Stop() {
 		return
 	}
 	s.lifecycleMu.Lock()
-	if !s.started || s.stopped {
+	if !s.started || s.stopping || s.stopped {
 		done := s.done
-		s.stopped = true
+		if !s.started {
+			s.stopped = true
+		}
 		s.lifecycleMu.Unlock()
 		if done != nil {
 			<-done
 		}
 		return
 	}
-	s.stopped = true
+	s.stopping = true
 	stop := s.stop
 	done := s.done
 	cancel := s.cancel
@@ -177,6 +197,14 @@ func (s *Scheduler) Stop() {
 	if cancel != nil {
 		cancel()
 	}
+	// An executor that already owns the execution gate is allowed to finish
+	// against the canceled context. No new executor can pass the gate after
+	// stopping is set, so the final stopped state is a hard I/O fence.
+	s.executionMu.Lock()
+	s.executionMu.Unlock()
+	s.lifecycleMu.Lock()
+	s.stopped = true
+	s.lifecycleMu.Unlock()
 	close(stop)
 	<-done
 }
@@ -233,36 +261,51 @@ func (s *Scheduler) ownerLoop() {
 }
 
 func (s *Scheduler) handle(command schedulerCommand) {
+	if s.isStopped() {
+		if command.result != nil {
+			command.result <- errors.New("scheduler is stopped")
+		}
+		return
+	}
 	var err error
 	switch command.kind {
 	case commandReconcile:
 		s.config = cloneConfig(command.config)
 		err = s.reconcileOwned(command.config)
 	case commandOccurrence:
-		s.handleOccurrence(command.id)
+		err = s.handleOccurrence(command.id, command.generation)
 	case commandCompensation:
-		s.handleCompensation(command.id)
+		err = s.handleCompensation(command.id, command.generation)
 	case commandMidnight:
-		if timer, exists := s.timers[midnightTimerID]; exists {
-			timer.Stop()
-			delete(s.timers, midnightTimerID)
+		if s.consumeTimer(midnightTimerID, command.generation) {
+			err = s.reconcileOwned(s.config)
+			if err != nil {
+				// The callback consumed the only midnight timer. Keep the
+				// event-driven horizon alive even when this reconciliation
+				// attempt fails.
+				if retryErr := s.scheduleMidnight(s.config); retryErr != nil {
+					err = errors.Join(err, retryErr)
+				}
+			}
 		}
-		err = s.reconcileOwned(s.config)
+	}
+	if err != nil && command.result == nil {
+		s.reportError(err)
 	}
 	if command.result != nil {
 		command.result <- err
 	}
 }
 
-func (s *Scheduler) enqueue(kind schedulerCommandKind, id string) {
+func (s *Scheduler) enqueue(kind schedulerCommandKind, id string, generation uint64) {
 	s.lifecycleMu.Lock()
-	if !s.started || s.stopped {
+	if !s.started || s.stopping || s.stopped {
 		s.lifecycleMu.Unlock()
 		return
 	}
 	commands, done := s.commands, s.done
 	s.lifecycleMu.Unlock()
-	command := schedulerCommand{kind: kind, id: id}
+	command := schedulerCommand{kind: kind, id: id, generation: generation}
 	select {
 	case commands <- command:
 	case <-done:
@@ -291,8 +334,7 @@ func (s *Scheduler) reconcileOwned(config domain.Config) error {
 			return err
 		}
 		s.cancelOccurrenceTimers()
-		s.scheduleMidnight(config)
-		return nil
+		return s.scheduleMidnight(config)
 	}
 	if s.planner == nil {
 		return errors.New("planner is required")
@@ -329,10 +371,18 @@ func (s *Scheduler) reconcileOwned(config domain.Config) error {
 			desired[id] = struct{}{}
 			if existing, exists := state.Occurrences[id]; exists {
 				if existing.Status == domain.OccurrencePlanned {
-					if existing.PlannedAt.IsZero() || !existing.PlannedAt.After(now) {
+					// A stable identity represents the same logical slot, not an
+					// immutable instant. Refresh the planned payload so a config
+					// change moves both persistence and timer ownership together.
+					existing.PlannedOccurrence = plan
+					delete(state.NextRuns, id)
+					if plan.Missed {
+						markMissed(&existing, plan.MissedReason)
+					} else if plan.PlannedAt.IsZero() || !plan.PlannedAt.After(now) {
 						markMissed(&existing, "past_due")
 					} else {
-						state.NextRuns[id] = existing.PlannedAt.UTC()
+						existing.Status = domain.OccurrencePlanned
+						state.NextRuns[id] = plan.PlannedAt.UTC()
 					}
 					state.Occurrences[id] = existing
 				} else if existing.Status == domain.OccurrenceFailed && !existing.CompensationAttempted && !existing.CompensationDueAt.IsZero() {
@@ -384,23 +434,22 @@ func (s *Scheduler) reconcileOwned(config domain.Config) error {
 		return err
 	}
 	s.reconcileTimers(resulting, now)
-	s.scheduleMidnight(config)
-	return nil
+	return s.scheduleMidnight(config)
 }
 
 func (s *Scheduler) reconcileTimers(state domain.RuntimeState, now time.Time) {
-	active := make(map[string]struct{})
+	active := make(map[string]time.Time)
 	for id, occurrence := range state.Occurrences {
 		switch occurrence.Status {
 		case domain.OccurrencePlanned:
 			if occurrence.PlannedAt.IsZero() || !occurrence.PlannedAt.After(now) {
 				continue
 			}
-			active[id] = struct{}{}
-			if _, exists := s.timers[id]; !exists {
-				plannedAt := occurrence.PlannedAt
-				s.timers[id] = s.clock.AfterFunc(plannedAt.Sub(now), func() {
-					s.enqueue(commandOccurrence, id)
+			plannedAt := occurrence.PlannedAt.UTC()
+			active[id] = plannedAt
+			if due, exists := s.timerDue[id]; !exists || !due.Equal(plannedAt) {
+				s.replaceTimer(id, plannedAt, now, func(generation uint64) {
+					s.enqueue(commandOccurrence, id, generation)
 				})
 			}
 		case domain.OccurrenceFailed:
@@ -408,15 +457,11 @@ func (s *Scheduler) reconcileTimers(state domain.RuntimeState, now time.Time) {
 				continue
 			}
 			key := compensationTimerID(id)
-			active[key] = struct{}{}
-			if _, exists := s.timers[key]; !exists {
-				due := occurrence.CompensationDueAt
-				delay := due.Sub(now)
-				if delay < 0 {
-					delay = 0
-				}
-				s.timers[key] = s.clock.AfterFunc(delay, func() {
-					s.enqueue(commandCompensation, id)
+			due := occurrence.CompensationDueAt.UTC()
+			active[key] = due
+			if scheduled, exists := s.timerDue[key]; !exists || !scheduled.Equal(due) {
+				s.replaceTimer(key, due, now, func(generation uint64) {
+					s.enqueue(commandCompensation, id, generation)
 				})
 			}
 		}
@@ -425,20 +470,70 @@ func (s *Scheduler) reconcileTimers(state domain.RuntimeState, now time.Time) {
 		if id == midnightTimerID {
 			continue
 		}
-		if _, exists := active[id]; !exists {
-			timer.Stop()
-			delete(s.timers, id)
+		due, exists := active[id]
+		if !exists || !s.timerDue[id].Equal(due) {
+			s.stopTimer(id, timer)
 		}
 	}
 }
 
-func (s *Scheduler) handleOccurrence(id string) {
+func (s *Scheduler) replaceTimer(id string, due, now time.Time, callback func(uint64)) {
 	if timer, exists := s.timers[id]; exists {
 		timer.Stop()
 		delete(s.timers, id)
+		delete(s.timerDue, id)
 	}
-	if s.states == nil || s.exec == nil {
+	s.timerGeneration[id]++
+	generation := s.timerGeneration[id]
+	due = due.UTC()
+	delay := due.Sub(now.UTC())
+	if delay < 0 {
+		delay = 0
+	}
+	s.timerDue[id] = due
+	s.timers[id] = s.clock.AfterFunc(delay, func() {
+		callback(generation)
+	})
+}
+
+func (s *Scheduler) stopTimer(id string, timer domain.Timer) {
+	if timer != nil {
+		timer.Stop()
+	}
+	delete(s.timers, id)
+	delete(s.timerDue, id)
+	s.timerGeneration[id]++
+}
+
+func (s *Scheduler) consumeTimer(id string, generation uint64) bool {
+	if generation != 0 && s.timerGeneration[id] != generation {
+		return false
+	}
+	timer, exists := s.timers[id]
+	if !exists {
+		return generation == 0
+	}
+	s.stopTimer(id, timer)
+	return true
+}
+
+func (s *Scheduler) retryTimer(id string, kind schedulerCommandKind, now time.Time) {
+	if s.isStopped() {
 		return
+	}
+	due := now.UTC().Add(schedulerRetryDelay)
+	s.replaceTimer(id, due, now, func(generation uint64) {
+		callbackID := id
+		if kind == commandCompensation {
+			callbackID = strings.TrimPrefix(id, compensationPrefix)
+		}
+		s.enqueue(kind, callbackID, generation)
+	})
+}
+
+func (s *Scheduler) handleOccurrence(id string, generation uint64) error {
+	if !s.consumeTimer(id, generation) || s.states == nil || s.exec == nil {
+		return nil
 	}
 	now := s.clock.Now().UTC()
 	var occurrence domain.PlannedOccurrence
@@ -458,12 +553,21 @@ func (s *Scheduler) handleOccurrence(id string) {
 		claimed = true
 		return nil
 	})
-	if err != nil || !claimed {
-		return
+	if err != nil {
+		s.retryTimer(id, commandOccurrence, now)
+		return fmt.Errorf("claim occurrence %q: %w", id, err)
 	}
-	record := s.exec.ExecutePreheat(s.ctx, occurrence)
+	if !claimed {
+		return nil
+	}
+	record, executing := s.execute(func() domain.OperationRecord {
+		return s.exec.ExecutePreheat(s.ctx, occurrence)
+	})
+	if !executing {
+		return nil
+	}
 	status := statusForRecord(record)
-	_ = s.states.Update(func(state *domain.RuntimeState) error {
+	terminalErr := s.states.Update(func(state *domain.RuntimeState) error {
 		ensureRuntimeStateMaps(state)
 		entry, exists := state.Occurrences[id]
 		if !exists {
@@ -482,28 +586,32 @@ func (s *Scheduler) handleOccurrence(id string) {
 		state.Occurrences[id] = entry
 		return nil
 	})
+	if terminalErr != nil {
+		terminalErr = fmt.Errorf("save terminal occurrence %q: %w", id, terminalErr)
+	}
 	// Re-read the latest config and advance the horizon after every callback.
-	_ = s.reconcileOwned(s.config)
+	reconcileErr := s.reconcileOwned(s.config)
+	if reconcileErr != nil {
+		reconcileErr = fmt.Errorf("reconcile after occurrence %q: %w", id, reconcileErr)
+	}
+	return errors.Join(terminalErr, reconcileErr)
 }
 
-func (s *Scheduler) handleCompensation(id string) {
+func (s *Scheduler) handleCompensation(id string, generation uint64) error {
 	timerID := compensationTimerID(id)
-	if timer, exists := s.timers[timerID]; exists {
-		timer.Stop()
-		delete(s.timers, timerID)
-	}
-	if s.states == nil || s.exec == nil {
-		return
+	if !s.consumeTimer(timerID, generation) || s.states == nil || s.exec == nil {
+		return nil
 	}
 	state, err := s.states.Load()
 	if err != nil {
-		return
+		s.retryTimer(timerID, commandCompensation, s.clock.Now().UTC())
+		return fmt.Errorf("load compensation occurrence %q: %w", id, err)
 	}
 	entry, exists := state.Occurrences[id]
 	next, owned := state.NextRuns[id]
 	if !exists || entry.Status != domain.OccurrenceFailed || entry.CompensationAttempted || entry.CompensationDueAt.IsZero() ||
 		!owned || !next.Equal(entry.CompensationDueAt) || !s.config.Enabled || !scheduledForConfig(s.config, entry.AccountKey) {
-		return
+		return nil
 	}
 	occurrence := entry.PlannedOccurrence
 	eligible := true
@@ -536,22 +644,28 @@ func (s *Scheduler) handleCompensation(id string) {
 		state.Occurrences[id] = entry
 		return nil
 	})
-	if err != nil || (!claimed && eligible) {
-		return
+	if err != nil {
+		s.retryTimer(timerID, commandCompensation, s.clock.Now().UTC())
+		return fmt.Errorf("claim compensation occurrence %q: %w", id, err)
+	}
+	if !claimed && eligible {
+		return nil
 	}
 	if !eligible {
-		_ = s.reconcileOwned(s.config)
-		return
+		return s.reconcileOwned(s.config)
 	}
-	var record domain.OperationRecord
-	if compensation, ok := s.exec.(CompensationExecutor); ok {
-		record = compensation.ExecuteCompensation(s.ctx, occurrence)
-	} else {
-		record = s.exec.ExecutePreheat(s.ctx, occurrence)
+	record, executing := s.execute(func() domain.OperationRecord {
+		if compensation, ok := s.exec.(CompensationExecutor); ok {
+			return compensation.ExecuteCompensation(s.ctx, occurrence)
+		}
+		return s.exec.ExecutePreheat(s.ctx, occurrence)
+	})
+	if !executing {
+		return nil
 	}
 	// The compensation is one-shot. The executor may have observed another
 	// transient failure and written a new due time; clear it unconditionally.
-	_ = s.states.Update(func(state *domain.RuntimeState) error {
+	terminalErr := s.states.Update(func(state *domain.RuntimeState) error {
 		ensureRuntimeStateMaps(state)
 		entry, exists := state.Occurrences[id]
 		if !exists {
@@ -564,34 +678,37 @@ func (s *Scheduler) handleCompensation(id string) {
 		state.Occurrences[id] = entry
 		return nil
 	})
-	_ = s.reconcileOwned(s.config)
+	if terminalErr != nil {
+		terminalErr = fmt.Errorf("save compensation occurrence %q: %w", id, terminalErr)
+	}
+	reconcileErr := s.reconcileOwned(s.config)
+	if reconcileErr != nil {
+		reconcileErr = fmt.Errorf("reconcile after compensation %q: %w", id, reconcileErr)
+	}
+	return errors.Join(terminalErr, reconcileErr)
 }
 
-func (s *Scheduler) scheduleMidnight(config domain.Config) {
-	if _, exists := s.timers[midnightTimerID]; exists {
-		return
-	}
+func (s *Scheduler) scheduleMidnight(config domain.Config) error {
 	location, err := time.LoadLocation(config.Timezone)
 	if err != nil {
-		return
+		return fmt.Errorf("timezone: %w", err)
 	}
 	now := s.clock.Now().UTC().In(location)
 	next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, location).UTC()
-	delay := next.Sub(s.clock.Now().UTC())
-	if delay < 0 {
-		delay = 0
+	if due, exists := s.timerDue[midnightTimerID]; exists && due.Equal(next) {
+		return nil
 	}
-	s.timers[midnightTimerID] = s.clock.AfterFunc(delay, func() {
+	s.replaceTimer(midnightTimerID, next, s.clock.Now().UTC(), func(generation uint64) {
 		// The callback is consumed by the owner; a subsequent reconcile creates
 		// the next local-midnight timer.
-		s.enqueue(commandMidnight, "")
+		s.enqueue(commandMidnight, "", generation)
 	})
+	return nil
 }
 
 func (s *Scheduler) stopTimers() {
 	for id, timer := range s.timers {
-		timer.Stop()
-		delete(s.timers, id)
+		s.stopTimer(id, timer)
 	}
 }
 
@@ -600,8 +717,31 @@ func (s *Scheduler) cancelOccurrenceTimers() {
 		if id == midnightTimerID {
 			continue
 		}
-		timer.Stop()
-		delete(s.timers, id)
+		s.stopTimer(id, timer)
+	}
+}
+
+func (s *Scheduler) isStopped() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return !s.started || s.stopping || s.stopped
+}
+
+func (s *Scheduler) execute(operation func() domain.OperationRecord) (domain.OperationRecord, bool) {
+	s.executionMu.Lock()
+	defer s.executionMu.Unlock()
+	if s.isStopped() {
+		return domain.OperationRecord{}, false
+	}
+	return operation(), true
+}
+
+func (s *Scheduler) reportError(err error) {
+	if err == nil || s.exec == nil {
+		return
+	}
+	if observer, ok := s.exec.(schedulerErrorObserver); ok {
+		observer.ReportSchedulerError(err)
 	}
 }
 

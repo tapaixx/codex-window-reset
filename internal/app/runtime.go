@@ -116,6 +116,14 @@ func New(deps Dependencies) (*Runtime, error) {
 		busy:   make(map[string]struct{}),
 		stop:   make(chan struct{}),
 	}
+	planner := deps.Planner
+	if planner == nil {
+		planner = schedule.Planner{}
+	}
+	// Construct the scheduler even when config loading reports corruption.
+	// Runtime remains disabled for manual diagnostics, but Start must still
+	// recover ownership of persisted work before any repair is attempted.
+	runtime.scheduler = schedule.NewScheduler(deps.Clock, planner, deps.State, runtime)
 	if err != nil {
 		if domain.CodeOf(err) == domain.CodeStoreCorrupt {
 			runtime.config = domain.DefaultConfig()
@@ -124,11 +132,6 @@ func New(deps Dependencies) (*Runtime, error) {
 		}
 		return nil, err
 	}
-	planner := deps.Planner
-	if planner == nil {
-		planner = schedule.Planner{}
-	}
-	runtime.scheduler = schedule.NewScheduler(deps.Clock, planner, deps.State, runtime)
 	return runtime, nil
 }
 
@@ -209,6 +212,13 @@ func (r *Runtime) clearStoreError() {
 	r.mu.Lock()
 	r.storeErrorCode = ""
 	r.mu.Unlock()
+}
+
+// ReportSchedulerError is consumed through schedule's private observer seam
+// so asynchronous timer and reconciliation failures remain visible in the
+// same sanitized status field as synchronous repository failures.
+func (r *Runtime) ReportSchedulerError(err error) {
+	r.setStoreError(err)
 }
 
 // Start recovers persisted scheduler ownership and reconciles the current
