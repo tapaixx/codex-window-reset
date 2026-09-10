@@ -149,9 +149,7 @@ func outputText(raw json.RawMessage) (string, bool) {
 		if text, ok := rawStringOK(value, "text"); ok {
 			return text, true
 		}
-	}
-	if text, ok := rawStringOK(value, "output_text"); ok {
-		return text, true
+		return "", false
 	}
 
 	var parts []string
@@ -185,11 +183,11 @@ func rawStringOK(object map[string]json.RawMessage, name string) (string, bool) 
 	if !ok {
 		return "", false
 	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
 		return "", false
 	}
-	return value, true
+	return *value, true
 }
 
 func rawArray(object map[string]json.RawMessage, name string) ([]json.RawMessage, bool) {

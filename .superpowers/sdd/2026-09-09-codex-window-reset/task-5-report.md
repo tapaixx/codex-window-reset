@@ -93,3 +93,66 @@ Commit message: `feat: add strict Codex probe protocol`.
 The final commit SHA is reported in the handoff; it is intentionally not
 embedded in this committed report because changing a commit to record its own
 hash necessarily changes that hash.
+
+## Fix round 1
+
+Fixed the Important finding in `internal/probe/sse.go`:
+
+- `outputText` now recognizes text only from an object whose `type` is
+  exactly `output_text` and whose `text` is a non-null JSON string. Arbitrary
+  `output_text` fields are no longer accepted, and an invalid typed object
+  cannot fall through to nested extraction.
+- `rawStringOK` now decodes through `*string`, so JSON `null` is rejected
+  instead of being treated as a valid empty string.
+
+Added focused regressions to `internal/probe/sse_test.go`:
+
+- `TestParseCompleted/arbitrary_output_text_field_is_rejected` rejects a
+  terminal response containing `response.output_text` without a valid
+  output-text object.
+- `TestParseCompleted/null_output_text_is_rejected` rejects a valid-shaped
+  output-text part whose `text` is JSON `null`.
+
+The focused red run was:
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test ./internal/probe -run TestParseCompleted -v
+```
+
+Result before the production fix: FAIL, with
+`TestParseCompleted/arbitrary_output_text_field_is_rejected` returning
+`"OK", <nil>` and `TestParseCompleted/null_output_text_is_rejected`
+returning `"", <nil>`.
+
+Post-fix verification:
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test ./internal/probe -run TestParseCompleted -v
+```
+
+Result: PASS; all `TestParseCompleted` cases, including both regressions, and
+`TestParseCompletedRejectsOversizedEvent` passed.
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test ./internal/probe -v
+```
+
+Result: PASS; all probe client/parser tests and `ExampleParseCompleted`
+passed.
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test ./...
+```
+
+Result: PASS; all packages (`accounts`, `domain`, `host`, `probe`, `schedule`,
+`simulate`, and `store`) passed.
+
+```text
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 gofmt -d internal/probe/sse.go internal/probe/sse_test.go
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go vet ./...
+docker run --rm -v /share/codeSpace/codex-window-reset/.worktrees/codex-window-reset:/src -w /src golang:1.24 go test -race ./internal/probe
+git diff --check
+```
+
+Results: `gofmt -d` produced no diff, `go vet ./...` passed, the race-enabled
+probe suite passed, and `git diff --check` passed.

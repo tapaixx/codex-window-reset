@@ -44,6 +44,16 @@ func TestParseCompleted(t *testing.T) {
 			want:  "OK",
 		},
 		{
+			name:    "arbitrary output_text field is rejected",
+			input:   `data: {"type":"response.completed","response":{"output_text":"OK"}}` + "\n",
+			wantErr: true,
+		},
+		{
+			name:    "null output text is rejected",
+			input:   `data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":null}]}]}}` + "\n",
+			wantErr: true,
+		},
+		{
 			name:  "non data lines are ignored",
 			input: "event: response.completed\n: comment\n\n" + `data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"OK"}]}]}}` + "\n",
 			want:  "OK",
