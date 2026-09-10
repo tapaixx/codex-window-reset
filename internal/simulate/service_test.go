@@ -92,6 +92,35 @@ func TestSimulationComparesBaselineForEachWorkPeriod(t *testing.T) {
 	}
 }
 
+func TestSimulationPreservesBaselinesForAdjacentWorkPeriods(t *testing.T) {
+	cfg := task4SimulationConfig(t)
+	cfg.WorkPeriods = []domain.LocalPeriod{
+		{Start: "09:00", End: "09:30"},
+		{Start: "09:30", End: "10:15"},
+	}
+	cfg.PreheatLeadMinutes = intPointer(15)
+	cfg.PreheatSpanMinutes = intPointer(60)
+	cfg.ScheduledAccountKeys = []string{"acct-a"}
+	date := time.Date(2026, time.September, 14, 0, 0, 0, 0, time.FixedZone("operator", 8*60*60))
+
+	got, err := (Service{}).Run(cfg, date)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Baseline.AvailableCoverageMinutes != 75 {
+		t.Fatalf("baseline coverage = %d, want 75 across adjacent work periods", got.Baseline.AvailableCoverageMinutes)
+	}
+	if got.Baseline.IdleWindowMinutes != 15 {
+		t.Fatalf("baseline idle = %d, want 15 across adjacent work periods", got.Baseline.IdleWindowMinutes)
+	}
+	if got.Scheduled.AvailableCoverageMinutes != 45 {
+		t.Fatalf("scheduled coverage = %d, want 45", got.Scheduled.AvailableCoverageMinutes)
+	}
+	if got.NetGainMinutes != -30 {
+		t.Fatalf("net gain = %d, want -30 after comparing adjacent work periods", got.NetGainMinutes)
+	}
+}
+
 func TestSimulationIgnoresSnapshotLikeFixtureChanges(t *testing.T) {
 	cfg := task4SimulationConfig(t)
 	date := time.Date(2026, time.September, 14, 0, 0, 0, 0, time.UTC)
@@ -133,4 +162,8 @@ func task4AssertTimelineIsNonOverlappingAndWithinDay(t *testing.T, segments []do
 			t.Fatalf("segments overlap at %d: %#v then %#v", index, segments[index-1], segment)
 		}
 	}
+}
+
+func intPointer(value int) *int {
+	return &value
 }

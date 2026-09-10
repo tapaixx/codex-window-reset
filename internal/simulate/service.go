@@ -24,7 +24,7 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 		return domain.SimulationResult{}, err
 	}
 
-	work := make([]timeInterval, 0, len(cfg.WorkPeriods))
+	resolvedWork := make([]timeInterval, 0, len(cfg.WorkPeriods))
 	if workday {
 		for _, period := range cfg.WorkPeriods {
 			start, end, ok, resolveErr := schedule.ResolveLocalPeriod(location, date, period)
@@ -32,15 +32,21 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 				return domain.SimulationResult{}, resolveErr
 			}
 			if ok {
-				work = append(work, timeInterval{start: start, end: end})
+				resolvedWork = append(resolvedWork, timeInterval{start: start, end: end})
 			}
 		}
 	}
-	work = mergeIntervals(work)
 
 	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, location)
 	dayEnd := dayStart.AddDate(0, 0, 1)
-	work = clipIntervals(work, dayStart, dayEnd)
+	workPeriods := make([]timeInterval, 0, len(resolvedWork))
+	for _, period := range resolvedWork {
+		period = clipInterval(period, dayStart, dayEnd)
+		if period.end.After(period.start) {
+			workPeriods = append(workPeriods, period)
+		}
+	}
+	work := mergeIntervals(workPeriods)
 	workMinutes := wholeMinutes(totalDuration(work))
 
 	productivity := time.Duration(cfg.ProductivityMinutes) * time.Minute
@@ -52,8 +58,8 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 		}
 	}
 
-	baselineWindows := make([]timeInterval, 0, len(work))
-	for _, period := range work {
+	baselineWindows := make([]timeInterval, 0, len(workPeriods))
+	for _, period := range workPeriods {
 		baselineWindows = append(baselineWindows, clipInterval(timeInterval{
 			start: period.start,
 			end:   period.start.Add(productivity),
