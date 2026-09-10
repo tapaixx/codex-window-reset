@@ -1,0 +1,10 @@
+package main
+
+import "embed"
+
+// EmbeddedWebAssets is passed to the management package by the native host
+// integration. Keeping the embed at the repository root lets Go include the
+// sibling web directory without duplicating files under internal packages.
+//
+//go:embed web/* web/modules/*
+var EmbeddedWebAssets embed.FS

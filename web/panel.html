@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Codex Window Reset</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Operations</p>
+        <h1>Codex Window Reset</h1>
+      </div>
+      <div class="connection" id="connection" data-state="loading">Connecting</div>
+    </header>
+
+    <main class="shell" id="app" aria-live="polite">
+      <section class="summary" aria-labelledby="summary-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Runtime</p>
+            <h2 id="summary-title">Status</h2>
+          </div>
+          <button class="button button-secondary" type="button" data-action="refresh">Refresh</button>
+        </div>
+        <div class="summary-grid" id="status-summary"></div>
+      </section>
+
+      <section class="workspace" aria-labelledby="accounts-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Inventory</p>
+            <h2 id="accounts-title">Accounts</h2>
+          </div>
+          <button class="button" type="button" data-action="probe">Run Probe</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Account</th>
+                <th scope="col">Plan</th>
+                <th scope="col">State</th>
+                <th scope="col">Scheduled</th>
+              </tr>
+            </thead>
+            <tbody id="accounts-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="workspace" aria-labelledby="schedule-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Configuration</p>
+            <h2 id="schedule-title">Schedule</h2>
+          </div>
+          <div class="button-row">
+            <button class="button button-secondary" type="button" data-action="simulate">Simulate</button>
+            <button class="button" type="button" data-action="save">Save</button>
+          </div>
+        </div>
+        <div class="schedule-grid" id="schedule-form"></div>
+      </section>
+
+      <section class="workspace" aria-labelledby="history-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Records</p>
+            <h2 id="history-title">History</h2>
+          </div>
+          <button class="button button-secondary" type="button" data-action="load-history">Load</button>
+        </div>
+        <div class="record-list" id="history-list"></div>
+      </section>
+
+      <p class="feedback" id="feedback" role="status"></p>
+    </main>
+
+    <script type="module" src="./modules/main.js"></script>
+  </body>
+</html>

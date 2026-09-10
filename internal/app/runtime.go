@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tapaixx/codex-window-reset/internal/accounts"
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 	"github.com/tapaixx/codex-window-reset/internal/schedule"
+	"github.com/tapaixx/codex-window-reset/internal/simulate"
 )
 
 // Dependencies are the host, persistence, and pure-domain seams Runtime
@@ -34,6 +36,7 @@ type Dependencies struct {
 // particular, the busy registry and bulk run state are never package globals.
 type Runtime struct {
 	mu           sync.RWMutex
+	configMu     sync.Mutex
 	deps         Dependencies
 	config       domain.Config
 	run          *runState
@@ -236,6 +239,8 @@ func (r *Runtime) Start() {
 	if r == nil {
 		return
 	}
+	r.configMu.Lock()
+	defer r.configMu.Unlock()
 	r.mu.RLock()
 	if r.stopped {
 		r.mu.RUnlock()
@@ -325,4 +330,188 @@ func (r *Runtime) releaseBusy(key string) {
 
 func normalizeKey(key string) string {
 	return strings.TrimSpace(key)
+}
+
+// Schedule returns a copy of the current complete configuration. The copy is
+// independent of Runtime so callers can edit a draft without racing the
+// scheduler or changing the live configuration before an explicit update.
+func (r *Runtime) Schedule() domain.Config {
+	return r.configSnapshot()
+}
+
+// GetSchedule is an explicit alias for embedders that prefer getter naming.
+func (r *Runtime) GetSchedule() domain.Config {
+	return r.Schedule()
+}
+
+// ListAccounts exposes the host-owned account projection used by management.
+// Authentication material is never part of accounts.Account.
+func (r *Runtime) ListAccounts(ctx context.Context) ([]accounts.Account, error) {
+	if r == nil || r.deps.Accounts == nil {
+		return nil, context.Canceled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return r.deps.Accounts.List(ctx)
+}
+
+// UpdateSchedule atomically replaces the persisted and live schedule. The
+// configuration lock covers revision comparison, account discovery,
+// validation, persistence, the in-memory swap, and scheduler reconciliation so
+// two writers cannot validate or reconcile against different revisions.
+func (r *Runtime) UpdateSchedule(ctx context.Context, draft domain.Config) (domain.Config, error) {
+	if r == nil {
+		return domain.Config{}, context.Canceled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	r.configMu.Lock()
+	defer r.configMu.Unlock()
+
+	r.mu.RLock()
+	current := cloneConfig(r.config)
+	r.mu.RUnlock()
+	if draft.Revision != current.Revision {
+		return domain.Config{}, appError(domain.CodeRevisionConflict, 409, false, "schedule revision changed")
+	}
+
+	known, err := r.discoveredAccountKeys(ctx)
+	if err != nil {
+		return domain.Config{}, err
+	}
+	if draft.SchemaVersion == 0 {
+		draft.SchemaVersion = current.SchemaVersion
+		if draft.SchemaVersion == 0 {
+			draft.SchemaVersion = domain.DefaultConfig().SchemaVersion
+		}
+	}
+	if err := domain.ValidateConfig(draft, domain.ValidatePersisted, known); err != nil {
+		return domain.Config{}, err
+	}
+	draft.Revision = current.Revision + 1
+
+	if err := r.deps.Config.Save(draft); err != nil {
+		r.setStoreError(err)
+		return domain.Config{}, err
+	}
+	r.mu.Lock()
+	r.config = cloneConfig(draft)
+	r.mu.Unlock()
+	if r.scheduler != nil {
+		if err := r.scheduler.Reconcile(draft); err != nil {
+			r.setStoreError(err)
+			return draft, err
+		}
+	}
+	r.clearStoreError()
+	return cloneConfig(draft), nil
+}
+
+func (r *Runtime) discoveredAccountKeys(ctx context.Context) (map[string]struct{}, error) {
+	accountsList, err := r.deps.Accounts.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]struct{}, len(accountsList))
+	for _, account := range accountsList {
+		if key := normalizeKey(account.Key); key != "" {
+			known[key] = struct{}{}
+		}
+	}
+	return known, nil
+}
+
+// Simulate validates a draft against the currently discovered accounts and
+// delegates all schedule math to the same pure simulator used by the runtime.
+func (r *Runtime) Simulate(ctx context.Context, draft domain.Config) (domain.SimulationResult, error) {
+	if r == nil {
+		return domain.SimulationResult{}, context.Canceled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	known, err := r.discoveredAccountKeys(ctx)
+	if err != nil {
+		return domain.SimulationResult{}, err
+	}
+	if err := domain.ValidateConfig(draft, domain.ValidateSimulation, known); err != nil {
+		return domain.SimulationResult{}, err
+	}
+	location, err := time.LoadLocation(draft.Timezone)
+	if err != nil {
+		return domain.SimulationResult{}, err
+	}
+	return (simulate.Service{}).Run(draft, r.now().In(location))
+}
+
+// ListHistory reads the bounded operation history without exposing the
+// repository implementation or filesystem errors to transport callers.
+func (r *Runtime) ListHistory() ([]domain.OperationRecord, error) {
+	if r == nil || r.deps.History == nil {
+		return nil, context.Canceled
+	}
+	records, err := r.deps.History.Load()
+	if err != nil {
+		r.setStoreError(err)
+	}
+	return records, err
+}
+
+// ClearHistory removes ordinary operation history and the in-memory quota
+// snapshots. It deliberately leaves configuration, runtime state, and reset
+// audit persistence untouched.
+func (r *Runtime) ClearHistory() error {
+	if r == nil || r.deps.History == nil {
+		return context.Canceled
+	}
+	if err := r.deps.History.Clear(); err != nil {
+		r.setStoreError(err)
+		return err
+	}
+	if clearer, ok := r.deps.Quota.(interface{ ClearSnapshots() }); ok {
+		clearer.ClearSnapshots()
+	}
+	r.clearStoreError()
+	return nil
+}
+
+// ListQuota returns only cached quota views. It discovers account identities
+// through the host metadata boundary but never performs an upstream refresh.
+func (r *Runtime) ListQuota(ctx context.Context) ([]domain.SnapshotView, error) {
+	if r == nil || r.deps.Accounts == nil || r.deps.Quota == nil {
+		return nil, context.Canceled
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	accountsList, err := r.deps.Accounts.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := r.now()
+	views := make([]domain.SnapshotView, 0, len(accountsList))
+	for _, account := range accountsList {
+		key := normalizeKey(account.Key)
+		if key == "" {
+			continue
+		}
+		if view, ok := r.deps.Quota.Get(key, now); ok {
+			if view.Snapshot.AccountKey == "" {
+				view.Snapshot.AccountKey = key
+			}
+			views = append(views, view)
+			continue
+		}
+		views = append(views, domain.SnapshotView{Snapshot: domain.UsageSnapshot{AccountKey: key}})
+	}
+	return views, nil
+}
+
+// CurrentQuota is an explicit alias for management adapters that use noun
+// naming. It retains the same memory-only behavior as ListQuota.
+func (r *Runtime) CurrentQuota(ctx context.Context) ([]domain.SnapshotView, error) {
+	return r.ListQuota(ctx)
 }
