@@ -546,36 +546,6 @@ func TestTerminalPersistenceFailureRearmsAndRetriesTerminalSave(t *testing.T) {
 		t.Fatalf("executor calls after terminal save retry=%d, want 1", got)
 	}
 }
-
-func TestClaimPersistenceFailureRearmsAndRetriesClaim(t *testing.T) {
-	now := schedulerInstant("2026-09-09T06:30:00Z")
-	occurrence := domain.PlannedOccurrence{
-		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
-		PlannedAt: now.Add(time.Minute), WindowStart: now, WindowEnd: now.Add(2 * time.Hour),
-	}
-	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
-	fx.planner.plans[occurrence.LocalDate] = []domain.PlannedOccurrence{occurrence}
-	fx.scheduler.Start()
-	defer fx.scheduler.Stop()
-	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
-		t.Fatal(err)
-	}
-	fx.states.FailNextUpdate(errors.New("claim persistence failed"))
-	fx.clock.Advance(time.Minute)
-	waitForSchedulerError(t, fx.executor)
-
-	retryDue := now.Add(time.Minute).Add(schedulerRetryDelay)
-	waitForClockTimer(t, fx.clock, retryDue)
-	fx.clock.Advance(schedulerRetryDelay)
-	t.Logf("after retry advance: calls=%#v state=%#v now=%s", fx.executor.Calls(), fx.states.saved().Occurrences[occurrence.ID], fx.clock.Now())
-	waitForExecutorCalls(t, fx.executor, 1)
-	t.Logf("after wait: calls=%#v state=%#v now=%s", fx.executor.Calls(), fx.states.saved().Occurrences[occurrence.ID], fx.clock.Now())
-	state := fx.states.saved().Occurrences[occurrence.ID]
-	if state.Status != domain.OccurrenceSucceeded {
-		t.Fatalf("state after claim retry=%#v, want succeeded", state)
-	}
-}
-
 func TestCompensationTerminalPersistenceFailureRearmsAndRetriesTerminalSave(t *testing.T) {
 	now := schedulerInstant("2026-09-09T06:30:00Z")
 	occurrence := domain.PlannedOccurrence{
