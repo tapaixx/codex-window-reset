@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { createCodexApiCall, deriveManagementBase, hostManagementRequest, normalizeCodexQuota, normalizeHostAuthFiles, request } from '../modules/api.js';
+import { createCodexApiCall, deriveManagementBase, hostManagementRequest, normalizeCodexQuota, normalizeHostAuthFiles, request, requestErrorMessage } from '../modules/api.js';
+
+test('surfaces actionable server validation details for invalid configuration', () => {
+  assert.equal(requestErrorMessage({ code: 'config_invalid', message: 'preheat lead and span are required when scheduling is enabled' }), 'preheat lead and span are required when scheduling is enabled');
+});
 
 test('derives management path from a suffixed resource path', () => {
   assert.equal(

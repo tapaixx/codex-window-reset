@@ -460,6 +460,17 @@ func (r *Runtime) Simulate(ctx context.Context, draft domain.Config) (domain.Sim
 	if err != nil {
 		return domain.SimulationResult{}, err
 	}
+	// Simulation is a what-if preview and must remain usable before the user
+	// has selected real scheduled accounts.  Use an internal planner-only
+	// account in that case; it is never persisted or sent to the runtime.
+	if len(draft.ScheduledAccountKeys) == 0 {
+		known["__simulation__"] = struct{}{}
+		draft.ScheduledAccountKeys = []string{"__simulation__"}
+	}
+	if draft.PreheatLeadMinutes == nil || draft.PreheatSpanMinutes == nil {
+		lead, span := 120, 60
+		draft.PreheatLeadMinutes, draft.PreheatSpanMinutes = &lead, &span
+	}
 	if err := domain.ValidateConfig(draft, domain.ValidateSimulation, known); err != nil {
 		return domain.SimulationResult{}, err
 	}

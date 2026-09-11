@@ -249,7 +249,11 @@ export function normalizeHostAuthFiles(payload) {
 
 export function requestErrorMessage(error) {
   if (error?.status === 401 || error?.status === 403) return ERROR_MESSAGES[error.status === 401 ? 'unauthorized' : 'forbidden'];
-  return ERROR_MESSAGES[error?.code] || '操作失败，请稍后重试。';
+  // Preserve the server's actionable validation detail.  The previous
+  // implementation replaced every config_invalid response with a generic
+  // message, making it impossible to tell which field failed validation.
+  if (error?.message && error.message !== ERROR_MESSAGES[error?.code]) return String(error.message);
+  return ERROR_MESSAGES[error?.code] || error?.message || '操作失败，请稍后重试。';
 }
 
 export function localizeManagementError(error) {
