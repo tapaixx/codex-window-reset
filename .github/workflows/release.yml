@@ -61,7 +61,7 @@ jobs:
           done
 
       - name: Run Node tests
-        run: BROWSER_BIN=/usr/bin/chromium node --test web/tests/*.test.mjs
+        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" node --test web/tests/*.test.mjs
 
       - name: Install release toolchain
         run: |

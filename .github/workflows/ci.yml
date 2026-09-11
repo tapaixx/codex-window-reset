@@ -48,7 +48,7 @@ jobs:
           done
 
       - name: Run Node tests
-        run: BROWSER_BIN=/usr/bin/chromium node --test web/tests/*.test.mjs
+        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" node --test web/tests/*.test.mjs
 
       - name: Build Linux amd64 plugin
         run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o /tmp/codex-window-reset-amd64.so .
@@ -108,7 +108,7 @@ jobs:
           go vet ./...
           go test -count=1 ./...
           go test -count=1 -race ./...
-          BROWSER_BIN=/usr/bin/chromium node --test web/tests/*.test.mjs
+          BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" node --test web/tests/*.test.mjs
 
       - name: Build native shared library
         run: CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -buildmode=c-shared -o "/tmp/codex-window-reset-${{ matrix.architecture }}.so" .

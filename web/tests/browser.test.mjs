@@ -26,11 +26,22 @@ const dockerBrowserImage = process.env.BROWSER_DOCKER_IMAGE || '';
 const browserRunner = hostBrowser || dockerBrowserImage ? 'available' : '';
 const browserSkip = browserRunner ? undefined : 'headless Chromium is not installed; CI installs it for this suite';
 
-test('browser process cleanup escalates and awaits child close', async () => {
-  const browser = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); process.send?.("ready"); setInterval(() => {}, 1000);'], {
+test('browser process cleanup escalates and terminates the child process group', async () => {
+  const script = `
+    const { spawn } = require('node:child_process');
+    process.on('SIGTERM', () => {});
+    const descendant = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    descendant.once('spawn', () => process.send?.({ ready: true, descendantPid: descendant.pid }));
+    setInterval(() => {}, 1000);
+  `;
+  const browser = spawn(process.execPath, ['-e', script], {
+    detached: true,
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   });
   let closed = false;
+  let descendantPid = 0;
   browser.once('close', () => {
     closed = true;
   });
@@ -40,16 +51,25 @@ test('browser process cleanup escalates and awaits child close', async () => {
       browser.once('error', reject);
     });
     await new Promise((resolve, reject) => {
-      browser.once('message', (message) => message === 'ready' ? resolve() : reject(new Error(`unexpected child message: ${message}`)));
+      browser.once('message', (message) => {
+        if (!message?.ready || !message.descendantPid) {
+          reject(new Error(`unexpected child message: ${JSON.stringify(message)}`));
+          return;
+        }
+        descendantPid = message.descendantPid;
+        resolve();
+      });
       browser.once('error', reject);
     });
     await terminateChild(browser, 25);
     assert.equal(closed, true);
     assert.equal(browser.signalCode, 'SIGKILL');
+    assert.throws(() => process.kill(descendantPid, 0), { code: 'ESRCH' });
   } finally {
-    if (browser.exitCode === null && browser.signalCode === null) {
-      browser.kill('SIGKILL');
-      await new Promise((resolve) => browser.once('close', resolve));
+    try {
+      process.kill(-browser.pid, 'SIGKILL');
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error;
     }
   }
 });
@@ -276,7 +296,7 @@ async function runBrowser(port, width, height, mode) {
     const invocation = dockerBrowserImage
       ? { file: 'docker', args: ['run', '--rm', '--network', 'host', '--entrypoint', '/usr/bin/google-chrome', dockerBrowserImage, ...chromeArgs] }
       : { file: hostBrowser, args: chromeArgs };
-    browser = spawn(invocation.file, invocation.args, { cwd: repositoryRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+    browser = spawn(invocation.file, invocation.args, { cwd: repositoryRoot, detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
     const { webSocketDebuggerUrl } = await waitForDevTools(debugPort, browser);
     const cdp = await connectDevTools(webSocketDebuggerUrl);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
@@ -290,7 +310,7 @@ async function runBrowser(port, width, height, mode) {
     throw new Error(`headless browser failed: ${error?.stack || error}`);
   } finally {
     await terminateChild(browser);
-    await rm(profile, { recursive: true, force: true });
+    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
@@ -306,15 +326,42 @@ async function terminateChild(child, graceMs = 2000) {
     });
   });
 
-  child.kill('SIGTERM');
+  signalProcessGroup(child.pid, 'SIGTERM');
   const timeout = new Promise((resolvePromise) => {
     timer = setTimeout(resolvePromise, graceMs);
     timer.unref?.();
   });
   await Promise.race([close, timeout]);
   clearTimeout(timer);
-  if (!closed && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  await close;
+  if (processGroupExists(child.pid)) signalProcessGroup(child.pid, 'SIGKILL');
+  if (!closed) await close;
+  await waitForProcessGroupExit(child.pid, graceMs);
+}
+
+function signalProcessGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if (error?.code !== 'ESRCH') throw error;
+  }
+}
+
+function processGroupExists(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(pid)) {
+    if (Date.now() >= deadline) throw new Error(`browser process group ${pid} did not exit`);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
 }
 
 async function findFreePort() {
