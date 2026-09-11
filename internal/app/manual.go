@@ -137,17 +137,31 @@ func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.Sn
 	if err != nil {
 		return nil, err
 	}
-	views := make([]domain.SnapshotView, len(normalized))
-	jobs := make(chan int)
+	// Register every worker while holding Runtime.mu. Stop takes the same lock
+	// before entering wg.Wait, so it cannot observe a zero counter and return
+	// while a refresh worker is about to begin host I/O.
 	workers := len(normalized)
 	if workers > 3 {
 		workers = 3
 	}
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return nil, appError(domain.CodeConfigInvalid, 409, false, "runtime is stopped")
+	}
+	r.wg.Add(workers)
+	r.mu.Unlock()
+
+	views := make([]domain.SnapshotView, len(normalized))
+	jobs := make(chan int)
 	var workerWG sync.WaitGroup
 	workerWG.Add(workers)
 	for index := 0; index < workers; index++ {
 		go func() {
-			defer workerWG.Done()
+			defer func() {
+				workerWG.Done()
+				r.wg.Done()
+			}()
 			for index := range jobs {
 				views[index] = r.refreshQuotaOne(ctx, normalized[index])
 			}

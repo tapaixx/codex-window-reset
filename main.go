@@ -57,86 +57,20 @@ static void free_host_buffer(void* ptr, size_t len) {
 	}
 }
 
-// These test-only C shims let Go tests exercise the exported ABI without
-// importing "C" from a _test.go file, which the Go toolchain rejects for a
-// package whose non-test files already use cgo.
-static int abi_test_host_call(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*) {
-	return 1;
-}
-
-static void abi_test_host_free(void*, size_t) {}
-
-static int abi_test_host_call_count;
-static int abi_test_host_free_count;
-
-static int abi_test_host_call_with_response(void*, const char* method, const uint8_t*, size_t, cliproxy_buffer* response) {
-	abi_test_host_call_count++;
-	if (strcmp(method, "host.auth.list") != 0 || response == NULL) {
-		return 1;
-	}
-	const char payload[] = "{\"ok\":true,\"result\":{\"files\":[]}}";
-	response->ptr = malloc(sizeof(payload) - 1);
-	if (response->ptr == NULL) {
-		response->len = 0;
-		return 1;
-	}
-	memcpy(response->ptr, payload, sizeof(payload) - 1);
-	response->len = sizeof(payload) - 1;
-	return 0;
-}
-
-static void abi_test_host_free_with_count(void* ptr, size_t) {
-	abi_test_host_free_count++;
-	free(ptr);
-}
-
-static void abi_test_reset_host_counts(void) {
-	abi_test_host_call_count = 0;
-	abi_test_host_free_count = 0;
-}
-
-static int abi_test_host_calls(void) {
-	return abi_test_host_call_count;
-}
-
-static int abi_test_host_frees(void) {
-	return abi_test_host_free_count;
-}
-
-static cliproxy_host_api abi_test_host;
-static cliproxy_plugin_api abi_test_plugin;
-
-static int abi_test_init(int has_host, int has_plugin, uint32_t host_version, uint32_t plugin_version, int with_call, int with_free) {
-	memset(&abi_test_host, 0, sizeof(abi_test_host));
-	memset(&abi_test_plugin, 0, sizeof(abi_test_plugin));
-	abi_test_host.abi_version = host_version;
-	abi_test_host.call = with_call ? abi_test_host_call : NULL;
-	abi_test_host.free_buffer = with_free ? abi_test_host_free : NULL;
-	abi_test_plugin.abi_version = plugin_version;
-	return cliproxy_plugin_init(
-		has_host ? &abi_test_host : NULL,
-		has_plugin ? &abi_test_plugin : NULL);
-}
-
-static int abi_test_init_with_response_host(void) {
-	memset(&abi_test_host, 0, sizeof(abi_test_host));
-	memset(&abi_test_plugin, 0, sizeof(abi_test_plugin));
-	abi_test_host.abi_version = 1;
-	abi_test_host.call = abi_test_host_call_with_response;
-	abi_test_host.free_buffer = abi_test_host_free_with_count;
-	return cliproxy_plugin_init(&abi_test_host, &abi_test_plugin);
-}
 */
 import "C"
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -345,9 +279,10 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		requestBytes = copied
 	}
 
-	result, err := dispatch(C.GoString(method), requestBytes)
+	methodName := C.GoString(method)
+	result, err := dispatch(methodName, requestBytes)
 	if err != nil {
-		writePluginResponse(response, mustJSON(pluginFailure("plugin_error", "plugin request failed")))
+		writePluginResponse(response, mustJSON(pluginFailureFromDispatch(err)))
 		return C.int(1)
 	}
 	writePluginResponse(response, mustJSON(pluginSuccess(result)))
@@ -386,8 +321,10 @@ type pluginResponse struct {
 }
 
 type pluginErrorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+	Retryable     bool   `json:"retryable"`
+	CorrelationID string `json:"correlation_id"`
 }
 
 func pluginSuccess(result any) pluginResponse {
@@ -395,13 +332,54 @@ func pluginSuccess(result any) pluginResponse {
 }
 
 func pluginFailure(code, message string) pluginResponse {
-	return pluginResponse{OK: false, Error: &pluginErrorBody{Code: code, Message: message}}
+	return pluginFailureWith(code, message, false)
+}
+
+func pluginFailureWith(code, message string, retryable bool) pluginResponse {
+	return pluginResponse{OK: false, Error: &pluginErrorBody{
+		Code:          code,
+		Message:       message,
+		Retryable:     retryable,
+		CorrelationID: newCorrelationID(),
+	}}
+}
+
+func newCorrelationID() string {
+	var raw [16]byte
+	if _, err := cryptorand.Read(raw[:]); err == nil {
+		return hex.EncodeToString(raw[:])
+	}
+	return "request-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
+}
+
+type dispatchError struct {
+	message   string
+	retryable bool
+}
+
+func (e *dispatchError) Error() string {
+	if e == nil || e.message == "" {
+		return "plugin request failed"
+	}
+	return e.message
+}
+
+func pluginFailureFromDispatch(err error) pluginResponse {
+	retryable := false
+	var dispatchErr *dispatchError
+	if errors.As(err, &dispatchErr) && dispatchErr != nil {
+		retryable = dispatchErr.retryable
+	}
+	// Do not expose dispatch or host details over the native boundary. The
+	// management transport still gets the same machine-readable error fields
+	// as an in-router failure, including one correlation ID for this request.
+	return pluginFailureWith("plugin_error", "plugin request failed", retryable)
 }
 
 func mustJSON(value any) []byte {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return []byte(`{"ok":false,"error":{"code":"encode_error","message":"plugin response encoding failed"}}`)
+		return mustJSON(pluginFailureWith("encode_error", "plugin response encoding failed", false))
 	}
 	return raw
 }
@@ -417,63 +395,6 @@ func writePluginResponse(response *C.cliproxy_buffer, raw []byte) {
 	C.memcpy(ptr, unsafe.Pointer(&raw[0]), C.size_t(len(raw)))
 	response.ptr = ptr
 	response.len = C.size_t(len(raw))
-}
-
-// callPluginForTest invokes the exported C entry point and releases the
-// returned C-owned buffer through the exported free function. It exists only
-// to keep the ABI lifecycle tests in ordinary Go test files.
-func callPluginForTest(method string, request []byte) (int, []byte) {
-	methodC := C.CString(method)
-	defer C.free(unsafe.Pointer(methodC))
-	var requestC unsafe.Pointer
-	if len(request) > 0 {
-		requestC = C.CBytes(request)
-		if requestC == nil {
-			return 1, nil
-		}
-		defer C.free(requestC)
-	}
-
-	var response C.cliproxy_buffer
-	status := cliproxyPluginCall(
-		methodC,
-		(*C.uint8_t)(requestC),
-		C.size_t(len(request)),
-		&response,
-	)
-	raw, _ := copyCBuffer(response.ptr, response.len)
-	if response.ptr != nil {
-		cliproxyPluginFree(response.ptr, response.len)
-	}
-	return int(status), raw
-}
-
-func initPluginForTest(hasHost, hasPlugin bool, hostVersion, pluginVersion uint32, withCall, withFree bool) int {
-	return int(C.abi_test_init(
-		C.int(boolToInt(hasHost)),
-		C.int(boolToInt(hasPlugin)),
-		C.uint32_t(hostVersion),
-		C.uint32_t(pluginVersion),
-		C.int(boolToInt(withCall)),
-		C.int(boolToInt(withFree)),
-	))
-}
-
-func initResponseHostForTest() int { return int(C.abi_test_init_with_response_host()) }
-
-func resetHostBoundaryCountsForTest() { C.abi_test_reset_host_counts() }
-
-func hostBoundaryCountsForTest() (calls, frees int) {
-	return int(C.abi_test_host_calls()), int(C.abi_test_host_frees())
-}
-
-func shutdownPluginForTest() { cliproxyPluginShutdown() }
-
-func boolToInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }
 
 type pluginRegistration struct {
@@ -654,7 +575,7 @@ func dispatch(method string, request []byte) (any, error) {
 		rt := runtimeSlot.runtime
 		if rt == nil {
 			runtimeSlot.RUnlock()
-			return nil, errors.New("plugin runtime is not initialized")
+			return nil, &dispatchError{message: "plugin runtime is not initialized", retryable: true}
 		}
 		// Registration and reconfiguration are lifecycle notifications. Schedule
 		// activation remains an explicit management PUT, preserving inert startup.
@@ -673,7 +594,7 @@ func dispatch(method string, request []byte) (any, error) {
 		runtimeSlot.RLock()
 		defer runtimeSlot.RUnlock()
 		if runtimeSlot.runtime == nil {
-			return nil, errors.New("plugin runtime is not initialized")
+			return nil, &dispatchError{message: "plugin runtime is not initialized", retryable: true}
 		}
 		router := management.NewRouter(runtimeSlot.runtime, embeddedManagementAssets())
 		return encodeManagementResponse(router.Handle(payload.request())), nil

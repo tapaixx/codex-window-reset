@@ -13,6 +13,7 @@ import (
 	"github.com/tapaixx/codex-window-reset/internal/app"
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 	"github.com/tapaixx/codex-window-reset/internal/host"
+	"github.com/tapaixx/codex-window-reset/internal/testabi"
 )
 
 func TestDispatchRegistersManagementAndDynamicResources(t *testing.T) {
@@ -92,7 +93,7 @@ func TestExportedInitRejectsNilAndWrongABI(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := initPluginForTest(test.name != "nil host", test.name != "nil plugin", test.host, test.plugin, test.withCall != 0, test.withFree != 0)
+			got := testabi.Init(test.name != "nil host", test.name != "nil plugin", test.host, test.plugin, test.withCall != 0, test.withFree != 0)
 			if got != test.wantStatus {
 				t.Fatalf("init status = %d, want %d", got, test.wantStatus)
 			}
@@ -104,7 +105,7 @@ func TestExportedInitRejectsNilAndWrongABI(t *testing.T) {
 }
 
 func TestExportedCallAllocatesAndFreesPluginBuffer(t *testing.T) {
-	status, raw := callPluginForTest("management.register", []byte(`{"resource_base_path":"/v0/resource/plugins/codex-window-reset"}`))
+	status, raw := testabi.Call("management.register", []byte(`{"resource_base_path":"/v0/resource/plugins/codex-window-reset"}`))
 	if status != 0 {
 		t.Fatalf("plugin call status = %d", status)
 	}
@@ -119,35 +120,35 @@ func TestExportedCallAllocatesAndFreesPluginBuffer(t *testing.T) {
 func TestHostCallerCopiesResponseAndAlwaysReleasesHostBuffer(t *testing.T) {
 	clearTestRuntime()
 	t.Chdir(t.TempDir())
-	if got := initResponseHostForTest(); got != 0 {
+	if got := testabi.InitResponseHost(); got != 0 {
 		t.Fatalf("init status = %d", got)
 	}
-	resetHostBoundaryCountsForTest()
+	testabi.ResetHostBoundaryCounts()
 	var response host.AuthListResponse
 	if err := hostCaller(context.Background(), "host.auth.list", map[string]any{}, &response); err != nil {
 		t.Fatal(err)
 	}
-	calls, frees := hostBoundaryCountsForTest()
+	calls, frees := testabi.HostBoundaryCounts()
 	if calls != 1 || frees != 1 {
 		t.Fatalf("host boundary calls=%d frees=%d, want one of each", calls, frees)
 	}
 	if response.Files == nil {
 		t.Fatal("host response was not decoded after the C buffer copy")
 	}
-	shutdownPluginForTest()
+	testabi.Shutdown()
 }
 
 func TestExportedInitStopsPreviousRuntime(t *testing.T) {
 	clearTestRuntime()
 	t.Chdir(t.TempDir())
-	if got := initPluginForTest(true, true, abiVersion, 0, true, true); got != 0 {
+	if got := testabi.Init(true, true, abiVersion, 0, true, true); got != 0 {
 		t.Fatalf("first init status = %d", got)
 	}
 	first := currentRuntime()
 	if first == nil {
 		t.Fatal("first init did not install a runtime")
 	}
-	if got := initPluginForTest(true, true, abiVersion, 0, true, true); got != 0 {
+	if got := testabi.Init(true, true, abiVersion, 0, true, true); got != 0 {
 		t.Fatalf("second init status = %d", got)
 	}
 	second := currentRuntime()
@@ -157,7 +158,7 @@ func TestExportedInitStopsPreviousRuntime(t *testing.T) {
 	if !first.Stopped() {
 		t.Fatal("first runtime was not stopped before replacement")
 	}
-	shutdownPluginForTest()
+	testabi.Shutdown()
 	if currentRuntime() != nil || !second.Stopped() {
 		t.Fatal("shutdown did not stop and clear the second runtime")
 	}
@@ -197,6 +198,28 @@ func TestDispatchManagementHandleReturnsRouterResponse(t *testing.T) {
 	}
 	if response.StatusCode != 200 || !bytes.Contains(response.Body, []byte(`"enabled":false`)) {
 		t.Fatalf("unexpected management response: %#v", response)
+	}
+}
+
+func TestManagementTransportFailureReturnsRetryableCorrelatedEnvelope(t *testing.T) {
+	clearTestRuntime()
+	status, raw := testabi.Call("management.handle", []byte(`{"method":"GET","path":"/v0/management/plugins/codex-window-reset/status"}`))
+	if status == 0 {
+		t.Fatal("management transport failure unexpectedly succeeded")
+	}
+	var envelope struct {
+		OK    bool `json:"ok"`
+		Error *struct {
+			Code          string `json:"code"`
+			Retryable     bool   `json:"retryable"`
+			CorrelationID string `json:"correlation_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("transport failure body = %s: %v", raw, err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "plugin_error" || !envelope.Error.Retryable || envelope.Error.CorrelationID == "" {
+		t.Fatalf("unstable transport failure envelope: %s", raw)
 	}
 }
 

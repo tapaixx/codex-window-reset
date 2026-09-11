@@ -570,6 +570,46 @@ func TestRefreshQuotasKeepsPriorSnapshotWhenAccountLookupFails(t *testing.T) {
 	}
 }
 
+func TestRefreshQuotasStopWaitsForHostIO(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	fx.quota.refreshEntered = make(chan struct{}, 1)
+	fx.quota.refreshRelease = make(chan struct{})
+
+	refreshDone := make(chan struct{})
+	go func() {
+		_, _ = fx.runtime.RefreshQuotas(context.Background(), []string{"a"})
+		close(refreshDone)
+	}()
+	select {
+	case <-fx.quota.refreshEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("quota refresh did not reach host I/O")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		fx.runtime.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("Runtime.Stop returned while quota host I/O was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(fx.quota.refreshRelease)
+	select {
+	case <-refreshDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("quota refresh did not finish after host release")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Runtime.Stop did not finish after quota host I/O completed")
+	}
+}
+
 func TestManualProbeRechecksQueuedAccountEligibility(t *testing.T) {
 	tests := []struct {
 		name      string
