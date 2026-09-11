@@ -196,6 +196,14 @@ async function startFixtureServer() {
         await serveManagementFixture(request, response, url.pathname, state);
         return;
       }
+      if (url.pathname === '/v0/management/auth-files') {
+        await serveManagementFixture(request, response, url.pathname, state);
+        return;
+      }
+      if (url.pathname === '/v0/management/api-call') {
+        await serveManagementFixture(request, response, url.pathname, state);
+        return;
+      }
       response.writeHead(404);
       response.end();
     } catch (error) {
@@ -219,8 +227,12 @@ async function serveManagementFixture(request, response, path, state) {
     jsonResponse(response, 200, { ok: true, result: { enabled: false, next_runs: {}, run_id: '', run_completed: 0, run_total: 0 } });
     return;
   }
-  if (request.method === 'GET' && path.endsWith('/accounts')) {
+      if (request.method === 'GET' && path.endsWith('/accounts')) {
     jsonResponse(response, 200, { ok: true, result: [{ account_key: 'acct-browser', email: 'browser@example.com', auth_index: '7', account_prefix: 'acct_browser', masked_identity: 'b***@example.com', plan_label: 'Pro', disabled: false, unavailable: false, fingerprint: 'browser-fp' }] });
+    return;
+  }
+  if (request.method === 'GET' && path === '/v0/management/auth-files') {
+    jsonResponse(response, 200, { files: [{ provider: 'codex', email: 'browser@example.com', auth_index: 'browser', account_id: 'acct_browser', plan: 'Pro', disabled: false, unavailable: false }] });
     return;
   }
   if (request.method === 'GET' && path.endsWith('/schedule')) {
@@ -258,12 +270,20 @@ async function serveManagementFixture(request, response, path, state) {
     jsonResponse(response, 200, { ok: true, result: [] });
     return;
   }
-  if (request.method === 'POST' && path.endsWith('/quota/refresh')) {
+      if (request.method === 'POST' && path.endsWith('/quota/refresh')) {
     const body = await requestBody(request);
     state.quotaRefreshRequests.push(body);
     jsonResponse(response, 200, { ok: true, result: [quotaView()] });
-    return;
-  }
+        return;
+      }
+      if (request.method === 'POST' && path === '/v0/management/api-call') {
+        const body = await requestBody(request);
+        state.quotaRefreshRequests.push(body);
+        const isCredits = String(body?.url || '').includes('rate-limit-reset-credits');
+        const result = isCredits ? { applicable_available_count: 2, available_count: 2, credits: [] } : { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: 1893456000 } } };
+        jsonResponse(response, 200, { status_code: 200, body: JSON.stringify(result) });
+        return;
+      }
   if (request.method === 'POST' && path.endsWith('/quota/reset')) {
     const body = await requestBody(request);
     state.resetRequests.push(body);

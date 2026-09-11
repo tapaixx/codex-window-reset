@@ -1,4 +1,4 @@
-import { request, requestErrorMessage } from './api.js';
+import { createCodexApiCall, hostManagementRequest, normalizeHostAuthFiles, request, requestErrorMessage } from './api.js';
 import { buildWindowStrategy, groupRunHistory, projectAccountRow, summarizeAccounts } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
@@ -141,16 +141,37 @@ function bootPanel() {
   }
 
   async function loadPanel() {
-    $('#connection').dataset.state = 'loading'; text('#connection', '正在读取插件状态…');
-    const [status, accounts, schedule, quota, history] = await Promise.all([request('/status'), request('/accounts'), request('/schedule'), request('/quota'), request('/history')]);
-    state.status = status || {}; state.accounts = accounts || []; state.quota = quota || []; state.history = history || []; state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
+    $('#connection').dataset.state = 'loading'; text('#connection', '正在加载数据…');
+    const [status, authFiles, schedule, quota, history] = await Promise.all([request('/status'), hostManagementRequest('/auth-files'), request('/schedule'), request('/quota'), request('/history')]);
+    state.status = status || {}; state.accounts = normalizeHostAuthFiles(authFiles); state.quota = quota || []; state.history = history || []; state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
     applySchedule(schedule || {}); renderHistory(); $('#connection').dataset.state = 'ready'; text('#connection', '');
   }
 
   async function refreshQuota(keys, button) {
     if (!keys.length) { text('#account-feedback', '请先选择账号。'); return; }
     button && (button.disabled = true); text('#account-feedback', '');
-    try { const refreshed = await request('/quota/refresh', { method: 'POST', body: { account_keys: keys } }); const merged = quotaIndex(); for (const view of refreshed || []) merged[view?.snapshot?.account_key] = view; state.quota = Object.values(merged); renderAccounts(); notify('配额快照已刷新'); } catch (error) { showError('#account-feedback', error); } finally { button && (button.disabled = false); }
+    try {
+      const refreshed = await Promise.all(keys.map(async (key) => {
+        const account = state.accounts.find((item) => item.account_key === key);
+        if (!account?.auth_index) throw new Error('账号缺少 auth_index');
+        const result = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', headers: { Accept: 'application/json' } }) });
+        const statusCode = Number(result?.status_code || result?.statusCode || 0);
+        if (statusCode < 200 || statusCode >= 300) throw new Error(`额度接口 HTTP ${statusCode || '-'}`);
+        const body = typeof result?.body === 'string' ? result.body : result?.data ?? result;
+        const usage = typeof body === 'string' ? JSON.parse(body) : body;
+        const windows = Object.entries(usage?.rate_limit || {}).filter(([name, value]) => value && typeof value === 'object' && value.limit_window_seconds).map(([name, value]) => ({ short: Number(value.limit_window_seconds) <= 18_000, remaining_percent: Math.max(0, Math.min(100, 100 - Number(value.used_percent || 0))), reset_at: value.reset_at ? new Date(Number(value.reset_at) * 1000).toISOString() : '' }));
+        if (!windows.length) throw new Error('额度接口未返回可识别窗口');
+        let resetCount = null;
+        try {
+          const detail = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: { Accept: 'application/json', 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' } }) });
+          const detailBody = typeof detail?.body === 'string' ? JSON.parse(detail.body) : detail?.body ?? detail?.data ?? detail;
+          resetCount = Number(detailBody?.applicable_available_count ?? detailBody?.available_count ?? detailBody?.reset_credits_available);
+          if (!Number.isFinite(resetCount)) resetCount = null;
+        } catch { /* usage remains useful when reset detail is unavailable */ }
+        return { stale: false, refresh_error_code: '', snapshot: { account_key: key, captured_at: new Date().toISOString(), windows, reset_info_complete: resetCount !== null, reset_credits: [], reset_applicable_count: resetCount } };
+      }));
+      const merged = quotaIndex(); for (const view of refreshed) merged[view.snapshot.account_key] = view; state.quota = Object.values(merged); renderAccounts(); notify('配额快照已刷新');
+    } catch (error) { showError('#account-feedback', error); } finally { button && (button.disabled = false); }
   }
 
   async function runProbe(button) {

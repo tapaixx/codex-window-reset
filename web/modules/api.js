@@ -16,6 +16,8 @@ const ERROR_MESSAGES = {
   forbidden: '宿主拒绝了此操作，请返回宿主登录后重试。',
 };
 
+const HOST_MANAGEMENT_BASE = '/v0/management';
+
 let requestDispatcher = null;
 
 function defaultResourcePath() {
@@ -106,6 +108,58 @@ export async function request(path, options = {}) {
     throw error;
   }
   return envelope.result;
+}
+
+// Host-owned management data is intentionally fetched from CLIProxyAPI's
+// canonical management surface. It is not a plugin route and must not be
+// derived from the resource URL.
+export async function hostManagementRequest(path, options = {}) {
+  const endpoint = String(path || '').startsWith('/') ? path : `/${path}`;
+  const { body, method = 'GET', headers = {}, ...fetchOptions } = options;
+  const init = {
+    ...fetchOptions,
+    method,
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...headers },
+  };
+  if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
+  const response = await fetch(`${HOST_MANAGEMENT_BASE}${endpoint}`, init);
+  let envelope = {};
+  try { envelope = await response.json(); } catch { /* handled below */ }
+  if (!response.ok) {
+    const details = envelope?.error || {};
+    const error = Object.assign(new Error(details.message || `HTTP ${response.status}`), details, { status: response.status });
+    throw error;
+  }
+  return envelope?.result ?? envelope;
+}
+
+export function createCodexApiCall({ authIndex, method = 'GET', url, headers = {}, data } = {}) {
+  const payload = { auth_index: String(authIndex || '').trim(), method, url, header: headers };
+  if (data !== undefined) payload.data = typeof data === 'string' ? data : JSON.stringify(data);
+  return payload;
+}
+
+export function normalizeHostAuthFiles(payload) {
+  const files = Array.isArray(payload) ? payload : payload?.files;
+  return (files || []).filter((file) => String(file?.provider || file?.type || file?.credential_type || '').toLowerCase() === 'codex')
+    .map((file) => {
+      const authIndex = String(file?.auth_index || file?.authIndex || file?.index || '').trim();
+      const accountID = String(file?.account_id || file?.accountId || file?.account || file?.id || '').trim();
+      return {
+        account_key: `acct-${authIndex}`,
+        auth_index: authIndex,
+        email: String(file?.email || '').trim(),
+        account_prefix: accountID,
+        masked_identity: String(file?.email || `acct-${authIndex}`).replace(/^(.).*(@.*)$/u, '$1***$2'),
+        account_id: accountID,
+        plan_label: String(file?.plan_label || file?.plan || file?.account_type || '').trim(),
+        disabled: Boolean(file?.disabled),
+        unavailable: Boolean(file?.unavailable),
+        fingerprint: '',
+        configuration_updated_at: String(file?.updated_at || file?.updatedAt || '').trim(),
+      };
+    }).filter((file) => file.auth_index);
 }
 
 export function requestErrorMessage(error) {
