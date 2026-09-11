@@ -1,7 +1,7 @@
 # Release verification evidence
 
-This record is for Task 14 and is based on the final reviewed implementation
-at `d618f98`.
+This record covers the reviewed Task 14 implementation through `d618f98` and
+the release-gate corrections applied after live GitHub Actions verification.
 
 The release contract is `v0.0.1` as a tag and `0.0.1` as the tag-stripped
 version, with Linux `amd64` and `arm64` shared libraries. The native plugin ABI
@@ -58,7 +58,7 @@ reports.
 | 2026-09-10 | `docker run --rm -v "$PWD":/src -w /src golang:1.24-bookworm sh -lc '/usr/local/go/bin/go version; /usr/local/go/bin/gofmt -w $(find . -name "*.go" -not -path "./.git/*"); /usr/local/go/bin/go vet ./...; /usr/local/go/bin/go test -count=1 ./...; /usr/local/go/bin/go test -count=1 -race ./...'` | Exit 0 in native Linux arm64 Docker; `go version go1.24.13 linux/arm64`, no formatting diff, vet had no diagnostics, and all normal/race packages reported `ok`; `internal/testabi` had no test files. |
 | 2026-09-10 | `docker run --rm --privileged --platform linux/amd64 ... golang:1.24-bookworm ...` with Docker amd64 binfmt | Exit nonzero before test completion: Go 1.24 `runtime` crashed in QEMU address-space handling (`lfstack.push`/`netpoll`). No amd64 suite result is claimed; native amd64 CI evidence is pending. |
 | 2026-09-10 | `node --check web/modules/api.js && node --check web/modules/state.js && node --check web/modules/accounts.js && node --check web/modules/schedule.js && node --check web/modules/simulator.js && node --check web/modules/history.js && node --check web/modules/main.js` | Exit 0 on the host Node runtime. |
-| 2026-09-10 | `BROWSER_DOCKER_IMAGE=lscr.io/linuxserver/chrome:latest node --test --test-reporter tap web/tests/*.test.mjs` | Exit 0; six test files produced 30 nested tests, 30 passed, 0 failed, 0 skipped, 0 cancelled, and 0 todo. The two browser acceptance tests ran against real Chrome with CDP metrics. Without a browser, the same runner reports six file-level modules and skips only those two tests; CI installs Chromium so it cannot silently skip there. |
+| 2026-09-10 | `BROWSER_DOCKER_IMAGE=lscr.io/linuxserver/chrome:latest node --test --test-reporter tap web/tests/*.test.mjs` | Exit 0; six test files produced 30 nested tests, 30 passed, 0 failed, 0 skipped, 0 cancelled, and 0 todo. The two browser acceptance tests ran against real Chrome with CDP metrics. A later live-CI correction added two process/executable guard tests, bringing the current suite to 32 tests; an explicit invalid `BROWSER_BIN` now fails instead of silently skipping, and browser child cleanup is awaited with bounded SIGKILL escalation. |
 | 2026-09-10 | Required secret scan (exact command below) | Exit 0 because it found only the allowed README management-key wording and test-only fixture/assertion strings. The production-only boundary scan below returned no matches; no test was weakened. |
 | 2026-09-10 | Required asset scan (exact command below) | Exit 1 with no matches; no wildcard asset registration was found. |
 | 2026-09-10 | `CC=x86_64-linux-gnu-gcc CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -buildmode=c-shared -o /tmp/codex-window-reset-amd64.so .` in native arm64 Go 1.24 Docker with `gcc-x86-64-linux-gnu libc6-dev-amd64-cross` | Exit 0; `readelf -h` reported ELF64 `Advanced Micro Devices X86-64`, and exact `nm -D` matching found all four ABI symbols. This is a cross-build only and does not close the pending native amd64 suite row. |
