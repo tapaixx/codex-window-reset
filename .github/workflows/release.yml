@@ -9,7 +9,60 @@ permissions:
   contents: write
 
 jobs:
+  verify-supported-architectures:
+    name: Native ${{ matrix.architecture }} verification
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+            goarch: amd64
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          check-latest: true
+          cache: false
+
+      - name: Set up Node LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Chromium for browser acceptance tests
+        run: |
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+      - name: Run format, static, and test checks
+        run: |
+          find . -name '*.go' -not -path './.git/*' -print0 | xargs -0 gofmt -w
+          go vet ./...
+          go test -count=1 ./...
+          go test -count=1 -race ./...
+          BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" node --test web/tests/*.test.mjs
+
+      - name: Build native shared library
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -buildmode=c-shared -o "/tmp/codex-window-reset-${{ matrix.architecture }}.so" .
+
   release:
+    needs: verify-supported-architectures
     runs-on: ubuntu-latest
     env:
       RELEASE_DIR: ${{ github.workspace }}/.release
