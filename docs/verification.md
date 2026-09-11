@@ -3,7 +3,7 @@
 This record covers the reviewed Task 14 implementation through `d618f98` and
 the release-gate corrections applied after live GitHub Actions verification.
 
-The release contract is `v0.0.1` as a tag and `0.0.1` as the tag-stripped
+The release contract is `v0.0.2` as a tag and `0.0.2` as the tag-stripped
 version, with Linux `amd64` and `arm64` shared libraries. The native plugin ABI
 must export `cliproxy_plugin_init`, `cliproxyPluginCall`, `cliproxyPluginFree`,
 and `cliproxyPluginShutdown`.
@@ -11,8 +11,8 @@ and `cliproxyPluginShutdown`.
 The seven release assets are:
 
 ```text
-codex-window-reset_0.0.1_linux_amd64.zip
-codex-window-reset_0.0.1_linux_arm64.zip
+codex-window-reset_0.0.2_linux_amd64.zip
+codex-window-reset_0.0.2_linux_arm64.zip
 checksums.txt
 codex-window-reset-linux-amd64.so
 codex-window-reset-linux-arm64.so

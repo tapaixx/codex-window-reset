@@ -35,6 +35,11 @@ test('panel IDs are unique and the four monitoring regions are present together'
   assert.doesNotMatch(html, /role=["']tab["']/);
 });
 
+test('panel exposes the current release version', async () => {
+  const html = await readProduction('panel.html');
+  assert.match(html, /<span class="version">v0\.0\.2<\/span>/);
+});
+
 test('static buttons have accessible names and inputs have labels', async () => {
   const html = await readProduction('panel.html');
   for (const match of html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
