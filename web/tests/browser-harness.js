@@ -4,7 +4,9 @@
   output.hidden = true;
   document.body.append(output);
 
-  const result = { ok: false };
+  const result = { ok: false, clientErrors: [] };
+  window.addEventListener('error', (event) => result.clientErrors.push(`error: ${event.message || event.error || 'unknown'}`));
+  window.addEventListener('unhandledrejection', (event) => result.clientErrors.push(`rejection: ${event.reason?.stack || event.reason || 'unknown'}`));
   try {
     const mode = new URL(location.href).searchParams.get('browser_test');
     if (mode === 'reset') await checkResetConfirmation(result);
@@ -12,7 +14,7 @@
     else await checkResponsiveLayout(result);
     result.ok = true;
   } catch (error) {
-    result.error = error?.stack || String(error);
+    result.error = `${error?.stack || String(error)}${result.clientErrors.length ? `\nClient errors:\n${result.clientErrors.join('\n')}` : ''}`;
   }
   output.textContent = JSON.stringify(result);
 })();
