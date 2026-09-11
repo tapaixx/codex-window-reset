@@ -1,7 +1,7 @@
 {
   "id": "codex-window-reset",
   "name": "codex-window-reset",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "repository": "https://github.com/tapaixx/codex-window-reset",
   "license": "MIT",
   "platforms": {

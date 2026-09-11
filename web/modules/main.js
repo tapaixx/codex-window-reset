@@ -173,8 +173,9 @@ function bootPanel() {
 
   async function loadPanel() {
     $('#connection').dataset.state = 'loading'; text('#connection', '正在加载数据…');
-    const [status, authFiles, schedule, quota, history, audit] = await Promise.all([request('/status'), hostManagementRequest('/auth-files'), request('/schedule'), request('/quota'), request('/history'), request('/reset-audit')]);
-    state.status = status || {}; state.accounts = normalizeHostAuthFiles(authFiles); state.quota = quota || []; state.history = history || []; state.audit = audit || []; state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
+    const jobs = await Promise.allSettled([request('/status'), hostManagementRequest('/auth-files'), request('/schedule'), request('/quota'), request('/history'), request('/reset-audit')]);
+    const value = (index, fallback) => jobs[index]?.status === 'fulfilled' ? jobs[index].value : fallback;
+    state.status = value(0, {}); state.accounts = normalizeHostAuthFiles(value(1, { files: [] })); const schedule = value(2, {}); state.quota = value(3, []); state.history = value(4, []); state.audit = value(5, []); state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
     applySchedule(schedule || {}); renderHistory(); renderAudit(); $('#connection').dataset.state = 'ready'; text('#connection', '');
   }
 

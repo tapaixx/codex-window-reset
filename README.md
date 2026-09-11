@@ -174,14 +174,14 @@ rollback step and can destroy operational or Reset Audit evidence.
 
 ## Verification
 
-The current release is `v0.0.4`; scripts receive and store `0.0.4` without the
+The current release is `v0.0.5`; scripts receive and store `0.0.5` without the
 leading `v`. The GitHub repository is
 <https://github.com/tapaixx/codex-window-reset>. A release contains these
 seven named assets:
 
 ```text
-codex-window-reset_0.0.4_linux_amd64.zip
-codex-window-reset_0.0.4_linux_arm64.zip
+codex-window-reset_0.0.5_linux_amd64.zip
+codex-window-reset_0.0.5_linux_arm64.zip
 checksums.txt
 codex-window-reset-linux-amd64.so
 codex-window-reset-linux-arm64.so
@@ -193,9 +193,9 @@ Verify downloaded assets from their directory with:
 
 ```bash
 sha256sum --check checksums.txt
-unzip -Z1 codex-window-reset_0.0.4_linux_amd64.zip \
+unzip -Z1 codex-window-reset_0.0.5_linux_amd64.zip \
   | diff -u - <(printf 'codex-window-reset.so\n')
-unzip -Z1 codex-window-reset_0.0.4_linux_arm64.zip \
+unzip -Z1 codex-window-reset_0.0.5_linux_arm64.zip \
   | diff -u - <(printf 'codex-window-reset.so\n')
 ```
 
