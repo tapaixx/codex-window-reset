@@ -1,7 +1,7 @@
 # Release verification evidence
 
 This record is for Task 14 and is based on the final reviewed implementation
-at `814fbee`.
+at `d618f98`.
 
 The release contract is `v0.0.1` as a tag and `0.0.1` as the tag-stripped
 version, with Linux `amd64` and `arm64` shared libraries. The native plugin ABI
