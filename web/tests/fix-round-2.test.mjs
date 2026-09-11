@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { prepareProbeRequest } from '../modules/main.js';
+
+test('scheduled membership is never inferred from every enabled account', async () => {
+  const source = await readFile(new URL('../modules/main.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /scheduled_account_keys:\s*state\.accounts\.filter/u);
+  assert.match(source, /data\.accountScheduled|accountScheduled|scheduledKeys/u);
+});
+
+test('panel defaults to masked identities and delegates simulation to the server', async () => {
+  const source = await readFile(new URL('../modules/main.js', import.meta.url), 'utf8');
+  assert.match(source, /hidden:\s*true/u);
+  assert.match(source, /request\(['"]\/simulate['"]/u);
+  assert.match(source, /result\.assumptions/u);
+  assert.doesNotMatch(source, /buildWindowStrategy\(/u);
+});
 
 const accounts = [
   { account_key: 'acct-disabled', disabled: true, unavailable: false },

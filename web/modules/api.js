@@ -176,6 +176,55 @@ export function createCodexApiCall({ authIndex, accountId = '', method = 'GET', 
   return payload;
 }
 
+function record(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function epochMillis(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value > 1e12 ? value : value * 1000;
+  const text = String(value).trim();
+  if (/^\d+(?:\.\d+)?$/u.test(text)) { const parsed = Number(text); return parsed > 1e12 ? parsed : parsed * 1000; }
+  const parsed = Date.parse(text); return Number.isNaN(parsed) ? null : parsed;
+}
+
+function resetCreditInfo(payload) {
+  const value = record(payload);
+  if (!value) return { count: null, credits: [], valid: false };
+  const credits = Array.isArray(value.credits) ? value.credits.filter((item) => record(item)).map((item) => ({ id: String(item.id || ''), expires_at: String(item.expires_at ?? item.expiresAt ?? '') })) : [];
+  const count = finiteNumber(value.applicable_available_count ?? value.applicableAvailableCount ?? value.available_count ?? value.availableCount);
+  return { count: count === null ? (credits.length || null) : count, credits, valid: ['credits', 'applicable_available_count', 'applicableAvailableCount', 'available_count', 'availableCount'].some((key) => Object.hasOwn(value, key)) };
+}
+
+export function normalizeCodexQuota(payload, { capturedAt = Date.now(), resetPayload = null } = {}) {
+  const root = record(payload) || {};
+  const rate = record(root.rate_limit ?? root.rateLimit) || {};
+  const rawWindows = [record(rate.primary_window ?? rate.primaryWindow), record(rate.secondary_window ?? rate.secondaryWindow)].filter(Boolean);
+  if (Array.isArray(rate.windows)) rawWindows.push(...rate.windows.filter((item) => record(item)));
+  const windows = rawWindows.map((window) => {
+    const seconds = finiteNumber(window.limit_window_seconds ?? window.limitWindowSeconds);
+    const minutes = finiteNumber(window.window_minutes ?? window.windowMinutes) ?? (seconds === null ? null : seconds / 60);
+    let used = finiteNumber(window.used_percent ?? window.usedPercent ?? window.used_fraction ?? window.usedFraction);
+    if (used !== null && used >= 0 && used <= 1) used *= 100;
+    const remaining = finiteNumber(window.remaining_percent ?? window.remainingPercent);
+    const resetDirect = epochMillis(window.reset_at ?? window.resetAt);
+    const resetAfter = finiteNumber(window.reset_after_seconds ?? window.resetAfterSeconds);
+    const resetAt = resetDirect ?? (resetAfter !== null && resetAfter >= 0 ? Number(capturedAt) + resetAfter * 1000 : null);
+    if (minutes === null || minutes <= 0 || (used === null && remaining === null)) return null;
+    return { duration_minutes: Math.round(minutes), remaining_percent: Math.max(0, Math.min(100, remaining ?? (100 - used))), reset_at: resetAt === null ? '' : new Date(resetAt).toISOString() };
+  }).filter(Boolean).sort((left, right) => left.duration_minutes - right.duration_minutes).filter((window, index, all) => index === 0 || window.duration_minutes !== all[index - 1].duration_minutes);
+  windows.forEach((window, index) => { window.short = index === 0; });
+  const embedded = resetCreditInfo(root.rate_limit_reset_credits ?? root.rateLimitResetCredits);
+  const detail = resetCreditInfo(resetPayload);
+  return { windows, reset_credits: detail.credits.length ? detail.credits : embedded.credits, reset_applicable_count: detail.count ?? embedded.count, reset_info_complete: detail.valid };
+}
+
 export function normalizeHostAuthFiles(payload) {
   const files = Array.isArray(payload) ? payload : payload?.files;
   return (files || []).filter((file) => String(file?.provider || file?.type || file?.credential_type || '').toLowerCase() === 'codex')

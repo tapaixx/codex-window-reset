@@ -72,12 +72,13 @@ type RuntimeAPI interface {
 }
 
 type statusResult struct {
-	Enabled        bool                 `json:"enabled"`
-	StoreErrorCode domain.ErrorCode     `json:"store_error_code,omitempty"`
-	NextRuns       map[string]time.Time `json:"next_runs,omitempty"`
-	RunID          string               `json:"run_id,omitempty"`
-	RunTotal       int                  `json:"run_total,omitempty"`
-	RunCompleted   int                  `json:"run_completed,omitempty"`
+	Enabled            bool                 `json:"enabled"`
+	StoreErrorCode     domain.ErrorCode     `json:"store_error_code,omitempty"`
+	NextRuns           map[string]time.Time `json:"next_runs,omitempty"`
+	RunID              string               `json:"run_id,omitempty"`
+	RunTotal           int                  `json:"run_total,omitempty"`
+	RunCompleted       int                  `json:"run_completed,omitempty"`
+	GuardrailHoldCount int                  `json:"guardrail_hold_count,omitempty"`
 }
 
 type envelope struct {

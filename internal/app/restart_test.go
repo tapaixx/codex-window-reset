@@ -65,3 +65,17 @@ func TestRuntimeStartRecoversWithCorruptConfigWithoutActivatingSchedule(t *testi
 		t.Fatal("corrupt config activated scheduling")
 	}
 }
+
+func TestRuntimeStatusCountsPersistentGuardrailHolds(t *testing.T) {
+	fx := newTask7Fixture(t)
+	defer fx.runtime.Stop()
+	if err := fx.state.Save(domain.RuntimeState{GuardrailHolds: map[string]domain.GuardrailHold{
+		"a": {AccountKey: "a"},
+		"b": {AccountKey: "b"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fx.runtime.Status().GuardrailHoldCount; got != 2 {
+		t.Fatalf("guardrail hold count = %d, want 2", got)
+	}
+}

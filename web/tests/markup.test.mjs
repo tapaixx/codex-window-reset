@@ -35,9 +35,26 @@ test('panel IDs are unique and the four monitoring regions are present together'
   assert.doesNotMatch(html, /role=["']tab["']/);
 });
 
+test('panel exposes explicit probe consent, reset audit, and editable period collections', async () => {
+  const html = await readProduction('panel.html');
+  assert.match(html, /id=["']probe-dialog["']/u);
+  assert.match(html, /id=["']reset-audit-output["']/u);
+  assert.match(html, /id=["']work-periods["']/u);
+  assert.match(html, /id=["']blackout-periods["']/u);
+  assert.match(html, /DELETE AUDIT/u);
+});
+
+test('summary exposes the five operational counts from the confirmed design', async () => {
+  const html = await readProduction('panel.html');
+  for (const id of ['summary-scheduled', 'summary-healthy', 'summary-paused', 'summary-guardrail', 'summary-stale']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
+  }
+  assert.doesNotMatch(html, /id=["']summary-(?:total|warning|disabled|next)["']/u);
+});
+
 test('panel exposes the current release version', async () => {
   const html = await readProduction('panel.html');
-  assert.match(html, /<span class="version">v0\.0\.2<\/span>/);
+  assert.match(html, /<span class="version">v0\.0\.3<\/span>/);
 });
 
 test('static buttons have accessible names and inputs have labels', async () => {
@@ -85,7 +102,7 @@ test('module exports and design tokens stay unique and exact', async () => {
   assert.match(css, /max-width\s*:\s*767px/);
   assert.match(css, /prefers-reduced-motion\s*:\s*reduce/);
   assert.match(css, /:focus-visible\s*\{/);
-  assert.match(css, /button\{[^{}]*min-height:\s*36px/);
+  assert.match(css, /button\{[^{}]*min-height:\s*44px/);
 });
 
 function contrastRatio(foreground, background) {

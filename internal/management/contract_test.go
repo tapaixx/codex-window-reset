@@ -337,6 +337,9 @@ func TestManagementResourcesServeEveryRegisteredAsset(t *testing.T) {
 	if strings.Contains(text, `src="./modules/`) || strings.Contains(text, `href="./styles.css"`) {
 		t.Fatal("panel still references secondary plugin resources")
 	}
+	if strings.Contains(text, `type="module"`) || strings.Contains(text, "import {") || strings.Contains(text, "export function") {
+		t.Fatal("served panel still contains ES module syntax")
+	}
 }
 
 func TestPluginIDExtractionAcceptsHostFieldVariantsAndRejectsAmbiguousPaths(t *testing.T) {

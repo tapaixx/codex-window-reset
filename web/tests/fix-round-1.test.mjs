@@ -54,7 +54,7 @@ test('reset eligibility requires a successful snapshot no older than five minute
   const account = { account_key: 'acct-a', unavailable: false, disabled: false };
   const base = {
     stale: false,
-    snapshot: { captured_at: new Date(capturedAt - 4 * 60 * 1000).toISOString(), reset_info_complete: true },
+    snapshot: { captured_at: new Date(capturedAt - 4 * 60 * 1000).toISOString(), reset_info_complete: true, reset_applicable_count: 1 },
   };
 
   assert.equal(isResetQuotaEligible(account, base, capturedAt), true);
@@ -70,6 +70,7 @@ test('reset eligibility requires a successful snapshot no older than five minute
     false,
   );
   assert.equal(isResetQuotaEligible({ ...account, unavailable: true }, base, capturedAt), false);
+  assert.equal(isResetQuotaEligible(account, { ...base, snapshot: { ...base.snapshot, reset_applicable_count: 0 } }, capturedAt), false);
 });
 
 test('failed quota refresh marks the preserved snapshot ineligible', () => {

@@ -37,11 +37,12 @@ func (r *Runtime) Status() domain.StatusView {
 		}
 	}
 	return domain.StatusView{
-		Enabled:        config.Enabled,
-		StoreErrorCode: storeError,
-		NextRuns:       nextRuns,
-		RunID:          runID,
-		RunTotal:       total,
-		RunCompleted:   completed,
+		Enabled:            config.Enabled,
+		StoreErrorCode:     storeError,
+		NextRuns:           nextRuns,
+		RunID:              runID,
+		RunTotal:           total,
+		RunCompleted:       completed,
+		GuardrailHoldCount: len(state.GuardrailHolds),
 	}
 }

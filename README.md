@@ -10,15 +10,16 @@ Automatic scheduling never spends Reset Credits.
 
 Use a CLIProxyAPI installation that supports native plugins, with a matching
 Linux `amd64` or `arm64` host. Production Go uses only the standard library.
-The panel uses browser-native ES modules and has no frontend dependency or
-page polling loop.
+The panel is served as one self-contained `/panel` document with inline CSS
+and JavaScript. It has no frontend dependency, secondary plugin-resource
+requests, or page polling loop.
 
 CLIProxyAPI owns its own panel/login/authentication flow and persistence. This
-plugin does not ask for, store, log, or expose the CLIProxyAPI management key;
-it has no plugin-owned login and no plugin-owned secret storage. Management
-requests use the host-owned authentication context. If the host login is
-missing or rejected, log in through CLIProxyAPI and retry; do not create a
-second plugin credential.
+plugin does not ask for, write, persist, log, or expose the CLIProxyAPI
+management key; it has no plugin-owned login and no plugin-owned secret
+storage. The browser reads CLIProxyAPI's already-saved key transiently from
+the host-owned local storage entry and sends it only as the Management API
+authorization header. Reloading or closing the page discards plugin state.
 
 The plugin does not receive or display Codex access tokens in the panel.
 Account identities are masked by default.
@@ -69,7 +70,8 @@ not activate preheating.
 
 To activate automatic work:
 
-1. Open the panel and refresh the account list through the host.
+1. Open the panel. Account metadata comes from CLIProxyAPI's
+   `/v0/management/auth-files` endpoint.
 2. Select accounts for scheduled preheating. The persistent Scheduled toggle
    is separate from the temporary Action Selection checkboxes.
 3. Set an IANA timezone, weekdays, ordered Critical Work Periods, preheat
@@ -104,11 +106,17 @@ same credit twice.
 
 ### Quota freshness and holds
 
-There is no page-open or interval quota polling. Refresh occurs only from an
-explicit operator action or around a Probe, Preheat Request, or Quota Reset.
-Usage Snapshots remain in runtime memory and become stale exactly five minutes
-after capture. A stale snapshot may remain visible, but it cannot authorize a
-`sufficient_window` decision.
+There is no page-open or interval quota polling. Two deliberately separate
+snapshot paths exist:
+
+- The panel calls CLIProxyAPI `/v0/management/api-call` only for an explicit
+  quota refresh and after a confirmed Reset. These display snapshots live only
+  in page memory and disappear on reload.
+- The plugin runtime refreshes its own decision snapshot immediately before
+  and after a Probe, Preheat Request, or Quota Reset. Runtime snapshots stay in
+  memory and become stale exactly five minutes after capture.
+
+A stale runtime snapshot cannot authorize a `sufficient_window` decision.
 
 If a successful snapshot shows any recognized Long Window at or below the
 configured Long Window floor (10% by default), automatic preheating enters a
@@ -166,14 +174,14 @@ rollback step and can destroy operational or Reset Audit evidence.
 
 ## Verification
 
-The current release is `v0.0.2`; scripts receive and store `0.0.2` without the
+The current release is `v0.0.3`; scripts receive and store `0.0.3` without the
 leading `v`. The GitHub repository is
 <https://github.com/tapaixx/codex-window-reset>. A release contains these
 seven named assets:
 
 ```text
-codex-window-reset_0.0.2_linux_amd64.zip
-codex-window-reset_0.0.2_linux_arm64.zip
+codex-window-reset_0.0.3_linux_amd64.zip
+codex-window-reset_0.0.3_linux_arm64.zip
 checksums.txt
 codex-window-reset-linux-amd64.so
 codex-window-reset-linux-arm64.so
@@ -185,9 +193,9 @@ Verify downloaded assets from their directory with:
 
 ```bash
 sha256sum --check checksums.txt
-unzip -Z1 codex-window-reset_0.0.2_linux_amd64.zip \
+unzip -Z1 codex-window-reset_0.0.3_linux_amd64.zip \
   | diff -u - <(printf 'codex-window-reset.so\n')
-unzip -Z1 codex-window-reset_0.0.2_linux_arm64.zip \
+unzip -Z1 codex-window-reset_0.0.3_linux_arm64.zip \
   | diff -u - <(printf 'codex-window-reset.so\n')
 ```
 

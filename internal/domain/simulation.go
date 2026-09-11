@@ -48,12 +48,13 @@ type SimulationResult struct {
 }
 
 type StatusView struct {
-	Enabled        bool                 `json:"enabled"`
-	StoreErrorCode ErrorCode            `json:"store_error_code,omitempty"`
-	NextRuns       map[string]time.Time `json:"next_runs"`
-	RunID          string               `json:"run_id,omitempty"`
-	RunTotal       int                  `json:"run_total"`
-	RunCompleted   int                  `json:"run_completed"`
+	Enabled            bool                 `json:"enabled"`
+	StoreErrorCode     ErrorCode            `json:"store_error_code,omitempty"`
+	NextRuns           map[string]time.Time `json:"next_runs"`
+	RunID              string               `json:"run_id,omitempty"`
+	RunTotal           int                  `json:"run_total"`
+	RunCompleted       int                  `json:"run_completed"`
+	GuardrailHoldCount int                  `json:"guardrail_hold_count"`
 }
 
 func (s StatusView) MarshalJSON() ([]byte, error) {

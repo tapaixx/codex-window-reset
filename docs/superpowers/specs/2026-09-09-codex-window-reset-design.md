@@ -27,7 +27,7 @@ The product must distinguish three actions that the reference implementation con
 - Report account-request success separately from whether a quota-window change was verified.
 - Treat long-window quota as a guardrail without making transient quota-endpoint failures halt all preheating.
 - Provide a dense but responsive operations panel based on the supplied blue-and-white dashboard reference.
-- Preserve proven upstream protocol behavior from `codex-health-monitor` without inheriting its duplicate schedulers, global registries, browser-side quota calls, or script-order overrides.
+- Preserve proven upstream and host Management API behavior from `codex-health-monitor` without inheriting its duplicate schedulers, global registries, or script-order overrides.
 
 ## Non-goals for the first release
 
@@ -46,7 +46,7 @@ The product must distinguish three actions that the reference implementation con
 - Go version: 1.24.
 - Runtime dependencies: Go standard library and CLIProxyAPI host ABI only.
 - Build mode: Linux CGO `-buildmode=c-shared` for `amd64` and `arm64`.
-- Frontend: embedded native HTML, CSS, and JavaScript ES modules; no frontend framework or runtime package dependency.
+- Frontend: one embedded `/panel` response with inline CSS and JavaScript; no frontend framework, runtime package dependency, or secondary plugin-resource request.
 - Management authentication is owned by CLIProxyAPI. The panel may consume the host-owned authentication context transiently to authorize API requests, but it must not prompt for the key or create a plugin-owned stored copy, log entry, or response field.
 - Access tokens must never enter plugin state files, history, audit responses, frontend payloads, or logs.
 - Copied or substantially derived code must retain the reference project's MIT license and attribution.
@@ -92,7 +92,12 @@ web/modules/                  API, state, accounts, schedule, simulator, history
 
 `internal/app.Runtime` owns all mutable registries and goroutine lifecycles. There are no package-global quota or managed-runtime registries. The exported C ABI keeps only the synchronized pointer required to hand calls to the active Runtime.
 
-CLIProxyAPI resource routes are exact matches, not prefix or wildcard routes. Management registration therefore declares `/panel` as the only menu resource and separately declares every embedded CSS and JavaScript asset path with an empty menu label. JavaScript modules use browser-native relative imports across this fixed allowlist; no source file overwrites functions defined by another file.
+CLIProxyAPI resource routes are exact matches, not prefix or wildcard routes.
+Management registration therefore declares `/panel` as the only resource and
+menu entry. The server inlines embedded CSS and ordered JavaScript sources into
+that response; the browser never requests `/styles.css` or `/modules/*`.
+Source modules retain explicit imports/exports for Node tests, but the served
+classic script contains neither module syntax nor cross-resource loading.
 
 ## Configuration model
 
@@ -268,14 +273,30 @@ not_observed
 
 ## Quota and Guardrail Hold
 
-Quota refresh calls the upstream usage endpoint and reset-credit endpoint through the host HTTP capability. Refresh is triggered only:
+The implementation keeps two quota projections with different authority and
+lifetime:
 
-- manually;
+- **Runtime decision snapshots** call the upstream usage and reset-credit
+  endpoints through the plugin's host HTTP capability. They are refreshed
+  only immediately before and after a Probe/Preheat operation and immediately
+  after a Quota Reset. They drive window outcomes and Guardrail Holds.
+- **Panel display snapshots** are obtained only when the Operator clicks
+  refresh (and after a confirmed Reset) by sending CLIProxyAPI
+  `/v0/management/api-call` a `$TOKEN$` request template plus the account's
+  `Chatgpt-Account-Id`. They exist only in page memory and never authorize a
+  runtime decision.
+
+Runtime refresh is triggered only:
+
 - immediately before a Health Probe or Preheat Request;
 - immediately after a Probe Request;
 - immediately after a Quota Reset.
 
-There is no page-open or interval polling. Usage Snapshots remain only in Runtime memory, display their capture time, and become stale after five minutes. A Stale Snapshot can remain visible but cannot authorize a `sufficient_window` decision.
+There is no upstream refresh on page open and no interval polling. Runtime
+Usage Snapshots remain only in Runtime memory and become stale after five
+minutes. A Stale Snapshot can remain visible but cannot authorize a
+`sufficient_window` decision. Reloading the page discards panel display
+snapshots.
 
 The exception is a Guardrail Hold. Once a successful snapshot shows any Long Window at or below `10%`, the hold persists in runtime state even after that snapshot becomes stale. Only a later successful refresh proving every recognized Long Window above the floor clears it.
 
@@ -386,19 +407,20 @@ Chinese UI messages map from these codes and may include sanitized details. HTTP
 
 ## Panel information architecture
 
-The chosen layout is **status home plus task workspace**:
+The chosen layout is a **single scrolling operations page**:
 
 ```text
-Header: product, version, connection, next run, primary actions
+Header: product, version, load state, primary actions
 Summary: scheduled, healthy, paused, Guardrail Hold, stale snapshot counts
 Accounts: persistent status table or mobile account cards
-Workspace tabs:
-  1. Strategy configuration
-  2. Deterministic simulator
-  3. Operational history and Reset Audit
+Strategy configuration and deterministic simulator: side by side when space permits
+Operational history and Reset Audit: separate sections below
 ```
 
-The account view includes transient Action Selection, persistent preheat toggle, masked identity, plan label, health, Short and Long Window bars, Reset Credits, next planned occurrence, request HTTP status and latency, last check, and sanitized error reason.
+The account view includes transient Action Selection, persistent preheat
+toggle, masked identity, plan label, explicit status, Short and Long Window
+remaining/reset text, Reset Credits, request/window outcomes, HTTP status and
+latency, snapshot time/staleness, and a sanitized error reason.
 
 Strategy configuration includes timezone, weekdays, ordered Work Periods, required preheat lead/span, Productivity Estimate, three quota thresholds, Blackout Periods, scheduled accounts, and advanced probe model/timeout. Unsaved edits remain local; “restore changes” restores the last server revision, not product defaults.
 
@@ -411,25 +433,31 @@ The supplied reference image defines the product direction: a light, dense, blue
 Core tokens are:
 
 ```text
-primary           #2563EB
-background        #F8FAFC
+primary           #3478F6
+background        #F4F7FB
 surface           #FFFFFF
-foreground        #1E293B
-muted-foreground  #475569
-border            #E2E8F0
-success           #059669
-warning           #D97706
-destructive       #DC2626
-focus-ring        #2563EB
+foreground        #1D2939
+muted-foreground  #667085
+border            #E4E9F1
+success           #12A16B
+warning           #E88618
+destructive       #E5484D
+focus-ring        #3478F6
 ```
 
 Typography uses a local system stack: `Inter`, `Noto Sans SC`, `Microsoft YaHei`, `system-ui`, and `sans-serif`, with `ui-monospace` for IDs and timestamps. No remote font request is required.
 
 The panel defaults to the light palette and follows CLIProxyAPI's host theme when a supported host theme signal exists. Status is never conveyed by color alone. Icon-only controls have accessible names, all interactions are keyboard reachable, focus indicators remain visible, normal text meets 4.5:1 contrast, and primary touch targets are at least 44 by 44 CSS pixels. Transitions use 150-250 ms and are disabled or reduced under `prefers-reduced-motion`.
 
-Responsive verification targets are 375, 768, 1024, and 1440 CSS pixels. Below 768 pixels, account rows become labeled cards and workspace tabs remain horizontally contained; the page itself never requires horizontal scrolling.
+Responsive verification targets are 375, 768, 1024, and 1440 CSS pixels. Below 768 pixels, account rows and history rows become labeled cards and all sections stack without requiring page-level horizontal scrolling.
 
-Identity fields are masked by default. Reveal state exists only for the current page session. Access tokens are never sent to the panel. If CLIProxyAPI authentication is absent or rejected, the panel directs the Operator to the host login instead of displaying a plugin-owned key prompt. Browser code may read the host-owned authentication state transiently when constructing an authenticated Management API request, but it never writes a plugin-specific credential entry.
+Identity fields are masked by default. Reveal state exists only for the current
+page session. Access tokens are never sent to the panel. Browser code reads
+CLIProxyAPI's already-saved management key transiently from the host-owned
+local-storage entry and attaches it to Management API requests. It never
+writes storage, shows a plugin login, or creates a plugin-specific credential.
+Account metadata comes from `/v0/management/auth-files`; operator-requested
+display quota comes from `/v0/management/api-call`.
 
 ## Testing strategy
 
@@ -454,7 +482,10 @@ Go unit tests cover:
 - atomic JSON writes, retention, deletion boundaries, and corrupt-store startup;
 - simulation results matching scheduler primitives.
 
-Management contract tests cover every route, HTTP status, response envelope, revision conflict, dynamic plugin ID, exact embedded asset registration and content type, authentication pass-through, and absence of secrets. Tests also prove that undeclared asset paths return not found because CLIProxyAPI does not support resource wildcards.
+Management contract tests cover every route, HTTP status, response envelope,
+revision conflict, dynamic plugin ID, the single embedded `/panel` resource,
+authentication pass-through, and absence of secrets. Tests also prove that
+the served panel is self-contained and undeclared asset paths return not found.
 
 Node's built-in test runner covers browser API-path derivation, state transitions, error-code localization, identity masking, sensitive-field rejection, responsive markup, accessibility labels, and the absence of duplicated global function definitions. No test requires a frontend framework.
 

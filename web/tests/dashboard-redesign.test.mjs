@@ -2,11 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  buildWindowStrategy,
-  groupRunHistory,
   maskOperationalIdentity,
   projectAccountRow,
   summarizeAccounts,
+  summarizeOperations,
 } from '../modules/dashboard.js';
 
 const accounts = [
@@ -35,45 +34,21 @@ test('an account without a cached quota snapshot is warning, not falsely healthy
   assert.deepEqual(summarizeAccounts([accounts[0]], {}), { total: 1, healthy: 0, warning: 1, disabled: 0 });
 });
 
+test('operations summary separates scheduled, paused, guardrail, and stale counts', () => {
+  const quota = {
+    'acct-1': { snapshot: { windows: [{ short: true, remaining_percent: 83 }] }, stale: false },
+    'acct-2': { snapshot: { windows: [{ short: true, remaining_percent: 61 }] }, stale: true },
+  };
+  assert.deepEqual(summarizeOperations({
+    accounts,
+    quotaByAccount: quota,
+    scheduledKeys: new Set(['acct-1', 'acct-3', 'acct-missing']),
+    guardrailHoldCount: 2,
+  }), { scheduled: 2, healthy: 1, paused: 2, guardrail: 2, stale: 1 });
+});
+
 test('identity hiding is session-only and consistently masks all operational identifiers', () => {
   assert.deepEqual(maskOperationalIdentity({ email: 'alice@example.com', authIndex: '17', accountPrefix: 'acct_abcdef' }), {
     email: 'a***@example.com', authIndex: '**', accountPrefix: 'acct_***cdef',
   });
-});
-
-test('history records are grouped into one detection run with aggregate outcomes', () => {
-  const grouped = groupRunHistory([
-    { id: '2', run_id: 'run-9', trigger: 'health_probe', account_key: 'acct-2', started_at: '2026-09-11T01:00:01Z', finished_at: '2026-09-11T01:00:04Z', request_outcome: 'timeout', error_code: 'probe_failed' },
-    { id: '1', run_id: 'run-9', trigger: 'health_probe', account_key: 'acct-1', started_at: '2026-09-11T01:00:00Z', finished_at: '2026-09-11T01:00:02Z', request_outcome: 'succeeded' },
-  ]);
-  assert.equal(grouped.length, 1);
-  assert.deepEqual(grouped[0], {
-    runId: 'run-9', startedAt: '2026-09-11T01:00:00Z', trigger: 'health_probe', accounts: 2,
-    succeeded: 1, failed: 1, durationMs: 4000, message: 'probe_failed', result: 'partial',
-  });
-});
-
-test('window strategy models repeated five-hour windows, lunch and preheat gain', () => {
-  const result = buildWindowStrategy({
-    window_hours: 5,
-    productivity_minutes: 60,
-    preheat_lead_minutes: 30,
-    preheat_span_minutes: 15,
-    work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '19:00' }],
-    skip_window_times: [],
-  });
-  assert.equal(result.workMinutes, 510);
-  assert.equal(result.windowMinutes, 300);
-  assert.equal(result.windows.length, 2);
-  assert.deepEqual(result.windows.map((window) => window.workStart), ['09:00', '14:00']);
-  assert.deepEqual(result.windows.map((window) => window.preheatAt), ['08:30', '13:30']);
-  assert.ok(result.preheatedAvailableMinutes > result.normalAvailableMinutes);
-  assert.equal(result.timeline.length, 24);
-  assert.deepEqual(result.workBands, [
-    { startMinute: 540, endMinute: 720, label: '09:00–12:00' },
-    { startMinute: 810, endMinute: 1140, label: '13:30–19:00' },
-  ]);
-  assert.deepEqual(result.breakBands, [{ startMinute: 720, endMinute: 810, label: '午休 12:00–13:30' }]);
-  assert.deepEqual(result.normalBands.map((band) => band.label), ['09:00–10:00', '14:00–15:00']);
-  assert.deepEqual(result.preheatBands.map((band) => band.label), ['08:30 预热', '13:30 预热']);
 });

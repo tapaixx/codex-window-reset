@@ -90,7 +90,7 @@ test('headless browser reset confirmation gates the request and sends the server
     assert.equal(result.resetRequest.account_key, 'acct-browser');
     assert.deepEqual(Object.keys(result.resetRequest).sort(), ['account_key', 'idempotency_key']);
     assert.match(result.resetRequest.idempotency_key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
-    assert.equal(result.dialogAccount, 'browser@example.com');
+    assert.equal(result.dialogAccount, 'b***@example.com');
     assert.equal(result.dialogCredits, '2');
   } finally {
     await fixture.close();
@@ -108,6 +108,20 @@ test('headless browser responsive viewports preserve essential state without pag
       assert.ok(result.overflow.bodyScrollWidth <= result.viewport.innerWidth, `${width}px body overflow: ${JSON.stringify(result.overflow)}`);
       assert.deepEqual(result.essential, { summary: true, accounts: true, accountState: true, workspace: true, controls: true }, `${width}px essential state`);
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('headless browser keeps scheduled membership separate and requires probe consent', { skip: browserSkip }, async () => {
+  const fixture = await startFixtureServer();
+  try {
+    const result = await runBrowser(fixture.port, 1024, 900, 'contracts');
+    assert.equal(result.ok, true, result.error || 'browser contract flow failed');
+    assert.deepEqual(result.scheduleRequest.scheduled_account_keys, ['acct-browser']);
+    assert.deepEqual(result.probeRequest.account_keys, ['acct-browser']);
+    assert.equal(result.probeRequest.acknowledge_quota_effect, true);
+    assert.equal(result.probeRequest.allow_unavailable, false);
   } finally {
     await fixture.close();
   }
@@ -151,7 +165,7 @@ async function requestBody(request) {
 }
 
 async function startFixtureServer() {
-  const state = { resetRequests: [], quotaRefreshRequests: [] };
+  const state = { resetRequests: [], quotaRefreshRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [] };
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -262,12 +276,31 @@ async function serveManagementFixture(request, response, path, state) {
     });
     return;
   }
+  if (request.method === 'PUT' && path.endsWith('/schedule')) {
+    const body = await requestBody(request); state.scheduleRequests.push(body);
+    jsonResponse(response, 200, { ok: true, result: { ...body, revision: 2 } });
+    return;
+  }
   if (request.method === 'GET' && path.endsWith('/quota')) {
     jsonResponse(response, 200, { ok: true, result: [] });
     return;
   }
   if (request.method === 'GET' && path.endsWith('/history')) {
     jsonResponse(response, 200, { ok: true, result: [] });
+    return;
+  }
+  if (request.method === 'GET' && path.endsWith('/reset-audit')) {
+    jsonResponse(response, 200, { ok: true, result: [] });
+    return;
+  }
+  if (request.method === 'POST' && path.endsWith('/simulate')) {
+    state.simulationRequests.push(await requestBody(request));
+    jsonResponse(response, 200, { ok: true, result: { work_minutes: 450, baseline: { available_coverage_minutes: 120, idle_window_minutes: 0 }, scheduled: { available_coverage_minutes: 180, idle_window_minutes: 15 }, net_gain_minutes: 60, preheat_windows: [], timeline_segments: [], assumptions: { productivity_minutes: 60 } } });
+    return;
+  }
+  if (request.method === 'POST' && path.endsWith('/probes')) {
+    const body = await requestBody(request); state.probeRequests.push(body);
+    jsonResponse(response, 202, { ok: true, result: { run_id: 'run-browser' } });
     return;
   }
       if (request.method === 'POST' && path.endsWith('/quota/refresh')) {

@@ -60,11 +60,12 @@ func (r *Router) handleManagement(request Request, endpoint, correlationID strin
 		}
 		view := r.runtime.Status()
 		result := statusResult{
-			Enabled:        view.Enabled,
-			StoreErrorCode: view.StoreErrorCode,
-			RunID:          view.RunID,
-			RunTotal:       view.RunTotal,
-			RunCompleted:   view.RunCompleted,
+			Enabled:            view.Enabled,
+			StoreErrorCode:     view.StoreErrorCode,
+			RunID:              view.RunID,
+			RunTotal:           view.RunTotal,
+			RunCompleted:       view.RunCompleted,
+			GuardrailHoldCount: view.GuardrailHoldCount,
 		}
 		if len(view.NextRuns) > 0 {
 			result.NextRuns = make(map[string]time.Time, len(view.NextRuns))

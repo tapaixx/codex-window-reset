@@ -57,6 +57,20 @@ func TestRouterStatusUsesSuccessEnvelope(t *testing.T) {
 	}
 }
 
+func TestRouterStatusIncludesGuardrailHoldCount(t *testing.T) {
+	router := NewRouter(testRuntime{status: domain.StatusView{Enabled: true, GuardrailHoldCount: 3}}, Assets{})
+	response := router.Handle(Request{
+		Method: "GET",
+		Path:   "/v0/management/plugins/codex-window-reset-linux-amd64/status",
+	})
+	if response.Status != 200 {
+		t.Fatalf("status = %d, want 200: %s", response.Status, response.Body)
+	}
+	if got := string(response.Body); got != `{"ok":true,"result":{"enabled":true,"guardrail_hold_count":3}}` {
+		t.Fatalf("body = %s", got)
+	}
+}
+
 func TestRouterRejectsUndeclaredAssetWithErrorEnvelope(t *testing.T) {
 	router := NewRouter(testRuntime{}, Assets{})
 	response := router.Handle(Request{

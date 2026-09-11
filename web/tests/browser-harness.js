@@ -8,6 +8,7 @@
   try {
     const mode = new URL(location.href).searchParams.get('browser_test');
     if (mode === 'reset') await checkResetConfirmation(result);
+    else if (mode === 'contracts') await checkScheduleAndProbeContracts(result);
     else await checkResponsiveLayout(result);
     result.ok = true;
   } catch (error) {
@@ -98,10 +99,34 @@ async function checkResponsiveLayout(result) {
     bodyClientWidth: document.body.clientWidth,
   };
   result.essential = {
-    summary: Boolean(rect('#account-summary')?.width > 0 && rect('#summary-total')?.width > 0),
+    summary: Boolean(rect('#account-summary')?.width > 0 && rect('#summary-scheduled')?.width > 0),
     accounts: Boolean(rect('#accounts-table')?.width > 0 && accountRow && accountViewport?.width > 0 && accountViewport.right <= innerWidth + 1),
-    accountState: Boolean(accountSelection && !accountSelection.disabled && accountText.includes('browser@example.com')),
+    accountState: Boolean(accountSelection && !accountSelection.disabled && accountText.includes('b***@example.com') && !accountText.includes('browser@example.com')),
     workspace: Boolean(settingsPanel?.width > 0 && simulatorPanel?.width > 0 && historyPanel?.width > 0),
     controls: controls.every((control) => control && control.width > 0 && control.height >= 36 && control.left >= -1 && control.right <= innerWidth + 1),
   };
+}
+
+async function checkScheduleAndProbeContracts(result) {
+  await waitForPanel();
+  const action = document.querySelector('[data-account-selection]');
+  const scheduled = document.querySelector('[data-account-scheduled]');
+  if (!scheduled || scheduled.checked) throw new Error('account unexpectedly starts scheduled');
+  action.click();
+  if (!action.checked || scheduled.checked) throw new Error('action selection changed scheduled membership');
+  scheduled.click();
+  document.querySelector('[name="preheat_lead_minutes"]').value = '30';
+  document.querySelector('[name="preheat_span_minutes"]').value = '15';
+  document.querySelector('#schedule-form button[type="submit"]').click();
+  const saved = await waitFor(async () => { const value = await fixtureState(); return value.scheduleRequests.length ? value : null; }, 'schedule request was not sent');
+  result.scheduleRequest = saved.scheduleRequests.at(-1);
+
+  const before = await fixtureState();
+  document.querySelector('[data-action="run-probe"]').click();
+  await waitFor(() => document.querySelector('#probe-dialog').open, 'probe consent dialog did not open');
+  const unconfirmed = await fixtureState();
+  if (unconfirmed.probeRequests.length !== before.probeRequests.length) throw new Error('probe request was sent before confirmation');
+  document.querySelector('#probe-confirm').click();
+  const probed = await waitFor(async () => { const value = await fixtureState(); return value.probeRequests.length > before.probeRequests.length ? value : null; }, 'confirmed probe request was not sent');
+  result.probeRequest = probed.probeRequests.at(-1);
 }

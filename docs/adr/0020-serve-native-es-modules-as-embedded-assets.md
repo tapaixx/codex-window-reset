@@ -1,3 +1,13 @@
-# Serve native ES modules as embedded assets
+# Serve one self-contained panel resource
 
-The panel uses embedded native HTML, CSS, and JavaScript ES modules. Because CLIProxyAPI matches resource routes exactly and rejects wildcard declarations, plugin registration lists `/panel` as the sole menu entry and every `/panel/assets/...` file as an exact menu-less resource. This keeps feature code in focused modules without introducing a frontend framework or build-time package graph, and avoids the reference panel's fragile concatenation of global scripts whose later definitions override earlier behavior.
+The plugin registers only `/panel`. At serve time it assembles embedded HTML,
+CSS, and the ordered browser modules into one document, removes module
+imports/exports, and emits a classic inline script. The browser therefore does
+not request `/styles.css`, `/modules/*`, or any other plugin resource. Source
+files remain separated for review and Node tests, while exact-route hosts need
+only one resource and no wildcard support. Contract tests verify that the
+served document contains neither external stylesheet/module references nor
+module syntax, and that undeclared resource paths return 404.
+
+This decision supersedes the earlier native-ES-module resource layout in the
+initial implementation plan.

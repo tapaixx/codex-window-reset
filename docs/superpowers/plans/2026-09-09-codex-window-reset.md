@@ -4,9 +4,9 @@
 
 **Goal:** Build a restart-safe CLIProxyAPI plugin that schedules bounded Codex preheat requests, supports manual health probes and auditable single-account quota resets, and exposes a responsive management panel.
 
-**Architecture:** A small C-shared entry point injects CLIProxyAPI host callbacks into `internal/app.Runtime`, which alone owns mutable state and goroutines. Pure domain, calendar, simulation, probe parsing, and quota parsing modules sit behind typed interfaces; atomic JSON repositories persist configuration/runtime/history/audit while usage snapshots remain in memory. The management layer exposes fixed JSON routes and an exact allowlist of embedded ES-module resources.
+**Architecture:** A small C-shared entry point injects CLIProxyAPI host callbacks into `internal/app.Runtime`, which alone owns mutable state and goroutines. Pure domain, calendar, simulation, probe parsing, and quota parsing modules sit behind typed interfaces; atomic JSON repositories persist configuration/runtime/history/audit while runtime usage snapshots remain in memory. The management layer exposes fixed JSON routes and one self-contained embedded `/panel` resource.
 
-**Tech Stack:** Go 1.24 standard library, Linux CGO `c-shared`, native HTML/CSS/JavaScript ES modules, Node built-in test runner, GitHub Actions.
+**Tech Stack:** Go 1.24 standard library, Linux CGO `c-shared`, self-contained native HTML/CSS/JavaScript, Node built-in test runner, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-09-codex-window-reset-design.md`
 
@@ -18,12 +18,12 @@
 - Automatic actions may issue only Preheat Requests; Quota Reset is always manual and targets exactly one account.
 - Health Probe and Preheat Request use the same real Codex request and disclose that they may consume ordinary quota or begin a Short Window.
 - Quota Reset uses both account-level single-flight and a durable caller-provided idempotency key.
-- CLIProxyAPI owns management authentication; neither backend nor browser stores or returns management keys or Codex access tokens.
-- Quota is fetched only on manual refresh, immediately before and after a probe, and immediately after a reset; there is no polling.
+- CLIProxyAPI owns management authentication. The browser may read its already-saved management key transiently but never writes or returns it; Codex access tokens never enter the panel.
+- Panel display quota is fetched through `/v0/management/api-call` only on manual refresh and after Reset. Runtime decision quota is fetched immediately before/after probes or preheats and after Reset; there is no polling.
 - Usage Snapshots are in memory, become stale after five minutes, and never authorize `sufficient_window` when stale.
 - A known Guardrail Hold survives snapshot staleness and restarts until a successful refresh proves all Long Windows above the floor.
 - Normal history retains 100 records; Reset Audit retains 365 days and requires `X-Confirmation: DELETE AUDIT` for deletion.
-- Browser assets are native embedded files registered one path at a time; no wildcard resource route or frontend runtime dependency.
+- Browser source is assembled into one embedded `/panel` response; no secondary plugin resource, wildcard route, or frontend runtime dependency exists.
 - Preserve MIT attribution for protocol/release code substantially derived from `tapaixx/codex-health-monitor`.
 - Every error response uses the stable envelope and includes a correlation ID; logs never contain credentials, keys, raw auth JSON, or upstream response bodies.
 
@@ -1154,7 +1154,7 @@ func TestRegistrationDeclaresEveryExactRouteAndAsset(t *testing.T) {
         "POST /plugins/codex-window-reset-linux-amd64/quota/reset":"", "GET /plugins/codex-window-reset-linux-amd64/reset-audit":"",
         "DELETE /plugins/codex-window-reset-linux-amd64/reset-audit":"",
     })
-    assertResourcePaths(t, got.Resources, []string{"/panel", "/styles.css", "/modules/api.js", "/modules/state.js", "/modules/accounts.js", "/modules/schedule.js", "/modules/simulator.js", "/modules/history.js", "/modules/main.js"})
+    assertResourcePaths(t, got.Resources, []string{"/panel"})
     if got.Resources[0].Menu == "" { t.Fatal("panel must be the menu resource") }
     for _, asset := range got.Resources[1:] { if asset.Menu != "" { t.Fatalf("asset leaked into menu: %#v", asset) } }
 }
@@ -1173,14 +1173,13 @@ Expected: FAIL because management package does not exist.
 Use `//go:embed` from a Go file at a common ancestor of `web`; if `internal/management/assets.go` cannot embed `../../web`, create root package `assets.go` with `//go:embed web/* web/modules/*` and pass its `fs.FS` into `management.NewAssets`. Do not duplicate generated strings.
 
 ```go
-var assetTypes = map[string]string{
-    "/panel":"text/html; charset=utf-8", "/styles.css":"text/css; charset=utf-8",
-    "/modules/api.js":"text/javascript; charset=utf-8", "/modules/state.js":"text/javascript; charset=utf-8",
-    "/modules/accounts.js":"text/javascript; charset=utf-8", "/modules/schedule.js":"text/javascript; charset=utf-8",
-    "/modules/simulator.js":"text/javascript; charset=utf-8", "/modules/history.js":"text/javascript; charset=utf-8",
-    "/modules/main.js":"text/javascript; charset=utf-8",
-}
+var assetTypes = map[string]string{"/panel":"text/html; charset=utf-8"}
 ```
+
+Read the embedded CSS and ordered source modules while serving `/panel`,
+remove source-level imports/exports, and inline them into the HTML. Assert the
+result has no external stylesheet/module reference and parses as a classic
+script. `/styles.css` and `/modules/*` remain undeclared and return 404.
 
 Accept `ResourceBasePath`, `resource_base_path`, or `resourceBasePath`; extract one safe plugin ID from `/v0/resource/plugins/<id>` and fall back to `codex-window-reset` on slash/query/whitespace. Normalize incoming resource and management prefixes without hardcoding a suffixed runtime ID.
 
@@ -1208,7 +1207,7 @@ Map exactly the methods/paths from the spec. `POST /probes` requires non-empty a
 
 - [ ] **Step 6: Add contract tests for all methods, secrets, and auth ownership**
 
-For each route assert success status, malformed JSON 400, wrong method 405, and stable response content type. Marshal every response with fake token `sk-secret`, raw email, raw auth JSON, and management key fixtures available to dependencies; assert none appear. Assert router does not read/write plugin key files and resources contain no key prompt, `localStorage`, or `sessionStorage` credential fallback.
+For each route assert success status, malformed JSON 400, wrong method 405, and stable response content type. Marshal every response with fake token `sk-secret`, raw email, raw auth JSON, and management key fixtures available to dependencies; assert none appear. Assert router does not read/write plugin key files and the panel contains no key prompt or storage-write fallback.
 
 - [ ] **Step 7: Run and commit the management boundary**
 
@@ -1240,7 +1239,7 @@ git commit -m "feat: expose authenticated management contracts"
 
 **Interfaces:**
 - Consumes: management envelope and the runtime `resource_base_path` encoded into panel bootstrap metadata.
-- Produces: browser-native `deriveManagementBase`, `request`, `createStore`, render functions, Chinese error localization, and the complete panel.
+- Produces: `deriveManagementBase`, host-authenticated request helpers, render functions, Chinese error localization, and the complete self-contained panel.
 
 - [ ] **Step 1: Write failing API-path, credential-storage, and reducer tests**
 
@@ -1254,9 +1253,10 @@ import { deriveManagementBase } from '../modules/api.js';
 test('derives management path from a suffixed resource path', () => {
   assert.equal(deriveManagementBase('/v0/resource/plugins/codex-window-reset-linux-arm64/panel'), '/v0/management/plugins/codex-window-reset-linux-arm64');
 });
-test('does not own authentication storage', async () => {
+test('reads only host-owned authentication storage', async () => {
   const source = await readFile(new URL('../modules/api.js', import.meta.url), 'utf8');
-  assert.equal(/localStorage|sessionStorage|management[_ -]?key/i.test(source), false);
+  assert.match(source, /localStorage\?\.getItem/);
+  assert.equal(/localStorage\s*\.\s*setItem|sessionStorage\s*\.\s*setItem/i.test(source), false);
 });
 ```
 
@@ -1280,13 +1280,17 @@ Expected: FAIL because browser modules do not export the tested functions.
 
 - [ ] **Step 3: Implement the panel shell and design tokens**
 
-`panel.html` contains header, five summary cards, accounts region, and three workspace tabs. Use semantic buttons, tables, forms, meter text, `aria-live` run status, labels for every input, and a standard `<dialog>` for one-account reset confirmation. Do not add a management-key input.
+`panel.html` contains header, five operational summary counts, accounts region,
+side-by-side strategy/simulator sections where space permits, and separate
+history/Reset Audit sections. Use semantic buttons, tables, forms, meter text,
+`aria-live` run status, labels for every input, and standard `<dialog>` elements
+for probe, reset, and destructive confirmations. Do not add a management-key input.
 
 ```css
 :root {
-  --primary:#2563eb; --background:#f8fafc; --surface:#fff; --foreground:#1e293b;
-  --muted:#475569; --border:#e2e8f0; --success:#059669; --warning:#d97706;
-  --destructive:#dc2626; --focus:#2563eb;
+  --primary:#3478f6; --background:#f4f7fb; --surface:#fff; --foreground:#1d2939;
+  --muted:#667085; --border:#e4e9f1; --success:#12a16b; --warning:#e88618;
+  --destructive:#e5484d; --focus:#3478f6;
   font-family:Inter,"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
 }
 :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
@@ -1297,11 +1301,17 @@ button, input, select { min-height:44px; }
 
 Use restrained 150–250 ms transitions and status text/icons in addition to colors. At widths 375/768/1024/1440, no page-level horizontal overflow is permitted.
 
-Add `syncHostTheme()` in `main.js`: read a same-origin parent document's `data-theme` or `.dark` signal when present, observe only those attributes with `MutationObserver`, and otherwise use `prefers-color-scheme`. Do not read CLIProxyAPI theme or authentication from browser storage. Keep the specified light palette as the initial/default render.
+Add `syncHostTheme()` in `main.js`: read a same-origin parent document's `data-theme` or `.dark` signal when present, observe only those attributes with `MutationObserver`, and otherwise use `prefers-color-scheme`. Keep the specified light palette as the initial/default render.
 
 - [ ] **Step 4: Implement API and state modules without polling**
 
-`api.js` calls `fetch` with `credentials:'same-origin'`, JSON headers, and the derived management base. It neither reads nor writes local/session storage. If HTTP 401/403 occurs, dispatch `host-auth-required` so the UI links back to host login. `state.js` holds the server schedule and a separate draft, ephemeral action selection, session-only identity reveal set, current run status, and last errors.
+`api.js` calls `fetch` with `credentials:'same-origin'`, JSON headers, and the
+derived management base. It may read and decode CLIProxyAPI's existing
+host-owned management-key entry, then attach `Authorization: Bearer` to both
+plugin and canonical Management API calls. It never writes local/session
+storage and never presents a plugin login. Account metadata is read from
+`/v0/management/auth-files`; page-display quota uses
+`/v0/management/api-call` with `$TOKEN$` and `Chatgpt-Account-Id`.
 
 ```js
 export async function request(path, options = {}) {
@@ -1314,7 +1324,14 @@ export async function request(path, options = {}) {
 
 - [ ] **Step 5: Implement accounts and operations UX**
 
-Render desktop rows/mobile cards with separate Scheduled toggle and Action Selection checkbox, masked identity/reveal for current session, plan, health, Short/Long bars, credits, next occurrence, Request Outcome, Window Outcome, HTTP/latency, capture time/stale label, and sanitized error. Manual probe requires selections plus an explicit quota-effect warning acknowledgement. Reset is enabled for exactly one selected account after successful current refresh and displays account + applicable credits in the dialog; call `crypto.randomUUID()` only when opening a new reset intent.
+Render desktop rows/mobile cards with separate Scheduled toggle and Action
+Selection checkbox, masked identity/reveal for the current page, plan/status,
+Short/Long remaining and reset text, credits, Request Outcome, Window Outcome,
+HTTP/latency, capture time/stale label, and sanitized error. Manual probe
+requires selection plus an explicit quota-effect confirmation. Each row's
+Reset action becomes available only after a successful current display refresh
+proves at least one applicable credit; the dialog shows that one account and
+credit count. Call `crypto.randomUUID()` only when opening a new reset intent.
 
 - [ ] **Step 6: Implement schedule, simulator, history, and audit workspaces**
 
@@ -1322,7 +1339,12 @@ Schedule editor covers every Config field, keeps probe model/timeout in a collap
 
 - [ ] **Step 7: Add markup/accessibility static tests**
 
-Read `panel.html`, CSS, and modules as text. Assert unique element IDs, buttons have text or `aria-label`, tab/tabpanel links exist, reset uses `<dialog>`, all identity outputs start masked, all asset imports resolve, each module export name is unique, tokens equal the spec values, media queries include 767 px and reduced motion, and forbidden strings `access_token`, `management key`, `localStorage`, and `sessionStorage` do not occur in production web files.
+Read `panel.html`, CSS, and modules as text. Assert unique element IDs,
+buttons have text or `aria-label`, all required regions coexist without tabs,
+reset uses `<dialog>`, all identity outputs start masked, all source imports
+resolve, each module export name is unique, tokens equal the spec values,
+media queries include 767 px and reduced motion, and production code contains
+no access token, storage write, session-storage fallback, or key prompt.
 
 Add a contrast helper test for every foreground/background token pair used for normal text and require WCAG ratio `>= 4.5`. The theme synchronization test supplies a fake parent root with `data-theme="dark"` and asserts the panel root changes without scheduling an interval.
 
@@ -1474,7 +1496,7 @@ On tags `v*`, repeat all verification, build with `-trimpath -ldflags="-s -w -X 
 
 - [ ] **Step 5: Write operator documentation and registry metadata**
 
-README must cover: Linux-only prerequisites; `.so` installation paths for both architectures; minimal CLIProxyAPI plugin enablement; panel URL; inert first startup; schedule activation; Probe quota warning; manual-only Reset with Reset Credit warning; no page polling; five-minute staleness; Guardrail Hold recovery; persistence files and deletion boundaries; host-owned login; upgrade/rollback; verification commands. State explicitly that the plugin never asks for or saves the CLIProxyAPI management key.
+README must cover: Linux-only prerequisites; `.so` installation paths for both architectures; minimal CLIProxyAPI plugin enablement; panel URL; inert first startup; schedule activation; Probe quota warning; manual-only Reset with Reset Credit warning; no page polling; the separation between panel display quota and runtime decision snapshots; five-minute runtime staleness; Guardrail Hold recovery; persistence files and deletion boundaries; host-owned authentication; upgrade/rollback; verification commands. State explicitly that the plugin may read CLIProxyAPI's existing browser value transiently but never asks for, writes, or saves a plugin-owned management key.
 
 `registry.json` identifies `codex-window-reset`, repository `https://github.com/tapaixx/codex-window-reset`, license MIT, and Linux `amd64`/`arm64`. `LICENSE` is the MIT text for Codex Window Reset contributors; `NOTICE` retains the upstream attribution.
 
@@ -1539,9 +1561,11 @@ Expected: all tests pass with caches bypassed for Go.
 
 - [ ] **Step 4: Verify frontend asset and secret invariants**
 
-Run: `rg -n 'access_token|Authorization: Bearer|management[_ -]?key|localStorage|sessionStorage' web internal/management README.md`
+Run: `rg -n 'access_token|localStorage\s*\.\s*setItem|sessionStorage\s*\.\s*setItem' web/modules web/panel.html web/styles.css internal/management`
 
-Expected: no production browser/management match; README may contain only the explicit statement that the plugin does not store a management key. Any test fixture token must live outside the searched production paths.
+Expected: no production match. Separately inspect `managementKey()` and prove it
+only reads CLIProxyAPI's known host-owned entries and never logs, returns, or
+persists the value.
 
 Run: `rg -n '/panel/assets/|Resources:.*\*|resource.*\*' . --glob '*.go' --glob '*.js' --glob '*.html'`
 

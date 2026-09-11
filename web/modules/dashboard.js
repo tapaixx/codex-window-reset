@@ -1,21 +1,6 @@
-const SUCCESS_OUTCOMES = new Set(['succeeded', 'verified_started', 'already_active', 'unchanged']);
-
 function number(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function clockMinutes(value) {
-  const match = /^(\d{2}):(\d{2})$/u.exec(String(value || ''));
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  return hours < 24 && minutes < 60 ? hours * 60 + minutes : null;
-}
-
-function clockLabel(minutes) {
-  const normalized = ((Math.round(minutes) % 1440) + 1440) % 1440;
-  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
 }
 
 function latestRecord(history, key) {
@@ -53,6 +38,17 @@ export function summarizeAccounts(accounts = [], quotaByAccount = {}) {
   return summary;
 }
 
+export function summarizeOperations({ accounts = [], quotaByAccount = {}, scheduledKeys = new Set(), guardrailHoldCount = 0 } = {}) {
+  const scheduled = scheduledKeys instanceof Set ? scheduledKeys : new Set(scheduledKeys || []);
+  return {
+    scheduled: accounts.filter((account) => scheduled.has(account.account_key)).length,
+    healthy: accounts.filter((account) => accountStatus(account, quotaByAccount[account.account_key]) === 'healthy').length,
+    paused: accounts.filter((account) => account.disabled || account.unavailable).length,
+    guardrail: Math.max(0, Number(guardrailHoldCount) || 0),
+    stale: Object.values(quotaByAccount).filter((view) => view?.stale).length,
+  };
+}
+
 export function projectAccountRow(account = {}, { quota = {}, history = [], hidden = false } = {}) {
   const record = latestRecord(history, account.account_key);
   const window = shortWindow(quota);
@@ -80,61 +76,4 @@ export function projectAccountRow(account = {}, { quota = {}, history = [], hidd
     configurationUpdatedAt: String(account.configuration_updated_at || ''),
     error: String(quota?.refresh_error_code || record.error_code || account.status_message || ''),
   };
-}
-
-export function groupRunHistory(records = []) {
-  const groups = new Map();
-  for (const record of Array.isArray(records) ? records : []) {
-    const key = record.run_id || record.correlation_id || record.id;
-    if (!key) continue;
-    const group = groups.get(key) || { records: [], runId: key };
-    group.records.push(record);
-    groups.set(key, group);
-  }
-  return [...groups.values()].map(({ records: items, runId }) => {
-    const starts = items.map((item) => ({ raw: item.started_at || '', value: Date.parse(item.started_at || '') })).filter((item) => Number.isFinite(item.value));
-    const finishes = items.map((item) => Date.parse(item.finished_at || item.started_at || '')).filter(Number.isFinite);
-    const succeeded = items.filter((item) => SUCCESS_OUTCOMES.has(item.request_outcome)).length;
-    const errors = items.map((item) => item.error_code).filter(Boolean);
-    return {
-      runId,
-      startedAt: starts.length ? starts.reduce((earliest, item) => item.value < earliest.value ? item : earliest).raw : '',
-      trigger: items[0]?.trigger || '',
-      accounts: new Set(items.map((item) => item.account_key).filter(Boolean)).size,
-      succeeded,
-      failed: items.length - succeeded,
-      durationMs: starts.length && finishes.length ? Math.max(...finishes) - Math.min(...starts.map((item) => item.value)) : 0,
-      message: errors[0] || (succeeded === items.length ? '检测完成' : '未记录结果'),
-      result: succeeded === items.length ? 'success' : succeeded ? 'partial' : 'failed',
-    };
-  }).sort((a, b) => Date.parse(b.startedAt || '') - Date.parse(a.startedAt || ''));
-}
-
-export function buildWindowStrategy(config = {}) {
-  const periods = (config.work_periods || []).map((period) => ({ start: clockMinutes(period.start), end: clockMinutes(period.end) }))
-    .filter((period) => period.start !== null && period.end !== null && period.end > period.start);
-  const workMinutes = periods.reduce((sum, period) => sum + period.end - period.start, 0);
-  const windowMinutes = Math.max(60, number(config.window_hours, 5) * 60);
-  const usableMinutes = Math.max(1, number(config.productivity_minutes, 60));
-  const lead = Math.max(0, number(config.preheat_lead_minutes, 0));
-  const skip = new Set(config.skip_window_times || []);
-  const windows = [];
-  if (periods.length) {
-    const finalEnd = periods.at(-1).end;
-    for (let cursor = periods[0].start; cursor < finalEnd; cursor += windowMinutes) {
-      const containingPeriod = periods.find((period) => cursor >= period.start && cursor < period.end);
-      if (!containingPeriod) continue;
-      const workStart = clockLabel(cursor);
-      if (skip.has(workStart)) continue;
-      windows.push({ workStart, preheatAt: clockLabel(cursor - lead), expiresAt: clockLabel(cursor + windowMinutes), anchorMinute: cursor, preheatMinute: cursor - lead });
-    }
-  }
-  const normalAvailableMinutes = Math.min(workMinutes, windows.length * usableMinutes);
-  const preheatedAvailableMinutes = Math.min(workMinutes, normalAvailableMinutes + Math.max(0, windows.length - 1) * Math.min(lead, usableMinutes));
-  const timeline = Array.from({ length: 24 }, (_, hour) => ({ hour, active: periods.some((period) => hour * 60 < period.end && (hour + 1) * 60 > period.start) }));
-  const workBands = periods.map((period) => ({ startMinute: period.start, endMinute: period.end, label: `${clockLabel(period.start)}–${clockLabel(period.end)}` }));
-  const breakBands = periods.slice(0, -1).map((period, index) => ({ startMinute: period.end, endMinute: periods[index + 1].start, label: `午休 ${clockLabel(period.end)}–${clockLabel(periods[index + 1].start)}` })).filter((band) => band.endMinute > band.startMinute);
-  const normalBands = windows.map((window) => ({ startMinute: window.anchorMinute, endMinute: Math.min(1440, window.anchorMinute + usableMinutes), label: `${clockLabel(window.anchorMinute)}–${clockLabel(window.anchorMinute + usableMinutes)}` }));
-  const preheatBands = windows.map((window) => ({ startMinute: window.preheatMinute, endMinute: Math.min(1440, window.anchorMinute + usableMinutes), anchorMinute: window.anchorMinute, label: `${clockLabel(window.preheatMinute)} 预热` }));
-  return { workMinutes, windowMinutes, windows, normalAvailableMinutes, preheatedAvailableMinutes, gainMinutes: preheatedAvailableMinutes - normalAvailableMinutes, timeline, workBands, breakBands, normalBands, preheatBands };
 }
