@@ -20,6 +20,7 @@ const browserCandidates = [
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
 ];
+const browserStartupTimeoutMs = 20_000;
 const hostBrowser = await resolveBrowserExecutable(process.env.BROWSER_BIN || '', browserCandidates);
 const dockerBrowserImage = process.env.BROWSER_DOCKER_IMAGE || '';
 const browserRunner = hostBrowser || dockerBrowserImage ? 'available' : '';
@@ -329,7 +330,7 @@ async function findFreePort() {
 }
 
 async function waitForDevTools(port, browser) {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + browserStartupTimeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     if (browser.exitCode !== null) throw new Error(`browser exited with ${browser.exitCode}`);
