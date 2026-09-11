@@ -5,7 +5,7 @@
   document.body.append(output);
 
   const result = { ok: false, clientErrors: [] };
-  window.addEventListener('error', (event) => result.clientErrors.push(`error: ${event.message || event.error || 'unknown'}`));
+  window.addEventListener('error', (event) => result.clientErrors.push(`error: ${event.error?.stack || event.message || 'unknown'}`));
   window.addEventListener('unhandledrejection', (event) => result.clientErrors.push(`rejection: ${event.reason?.stack || event.reason || 'unknown'}`));
   try {
     const mode = new URL(location.href).searchParams.get('browser_test');

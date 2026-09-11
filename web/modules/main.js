@@ -236,8 +236,8 @@ function bootPanel() {
   $('[data-action="refresh-quota"]').addEventListener('click', (event) => refreshQuota([...state.selected], event.currentTarget));
   $('[data-action="run-probe"]').addEventListener('click', openProbe);
   $('[data-action="restore-schedule"]').addEventListener('click', () => applySchedule(state.schedule));
-  $('[data-action="add-work-period"]').addEventListener('click', () => addPeriod('#work-periods'));
-  $('[data-action="add-blackout-period"]').addEventListener('click', () => addPeriod('#blackout-periods'));
+  $('[data-action="add-work-period"]')?.addEventListener('click', () => addPeriod('#work-periods'));
+  $('[data-action="add-blackout-period"]')?.addEventListener('click', () => addPeriod('#blackout-periods'));
   $('[data-action="add-skip-window"]').addEventListener('click', () => { const input = $('#skip-window-input'); if (input.value && !state.skipTimes.includes(input.value)) { state.skipTimes.push(input.value); state.skipTimes.sort(); input.value = ''; renderSkipTimes(); queueSimulation(); } });
   $('#schedule-enabled').addEventListener('change', queueSimulation); $('#schedule-form').addEventListener('input', queueSimulation);
   $('#schedule-form').addEventListener('submit', async (event) => { event.preventDefault(); const button = event.submitter; button.disabled = true; text('#schedule-feedback', ''); try { const saved = await request('/schedule', { method: 'PUT', headers: { 'If-Match': String(state.schedule.revision ?? 0) }, body: readSchedule() }); applySchedule(saved); notify('自动检测配置已保存'); } catch (error) { showError('#schedule-feedback', error); } finally { button.disabled = false; } });
