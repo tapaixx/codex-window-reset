@@ -5,7 +5,7 @@
 /release/
 /dist/
 /codex-window-reset-linux-*.so
-/codex-window-reset-linux-*.so.h
+/codex-window-reset-linux-*.h
 /codex-window-reset-linux-*.so.sha256
 /codex-window-reset_*.zip
 /checksums.txt
