@@ -12,7 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      RELEASE_DIR: ${{ runner.temp }}/codex-window-reset-release
+      RELEASE_DIR: ${{ github.workspace }}/.release
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -92,10 +92,10 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset_${{ steps.version.outputs.version }}_linux_amd64.zip
-            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset_${{ steps.version.outputs.version }}_linux_arm64.zip
-            ${{ runner.temp }}/codex-window-reset-release/checksums.txt
-            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-amd64.so
-            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-arm64.so
-            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-amd64.so.sha256
-            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-arm64.so.sha256
+            ${{ github.workspace }}/.release/codex-window-reset_${{ steps.version.outputs.version }}_linux_amd64.zip
+            ${{ github.workspace }}/.release/codex-window-reset_${{ steps.version.outputs.version }}_linux_arm64.zip
+            ${{ github.workspace }}/.release/checksums.txt
+            ${{ github.workspace }}/.release/codex-window-reset-linux-amd64.so
+            ${{ github.workspace }}/.release/codex-window-reset-linux-arm64.so
+            ${{ github.workspace }}/.release/codex-window-reset-linux-amd64.so.sha256
+            ${{ github.workspace }}/.release/codex-window-reset-linux-arm64.so.sha256

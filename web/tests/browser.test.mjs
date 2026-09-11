@@ -14,15 +14,51 @@ const repositoryRoot = resolve(webRoot, '..');
 const panelSource = await readFile(join(webRoot, 'panel.html'), 'utf8');
 const harnessSource = await readFile(join(testsDirectory, 'browser-harness.js'), 'utf8');
 
-const hostBrowser = await findExecutable(process.env.BROWSER_BIN || '', [
+const browserCandidates = [
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
-]);
+];
+const hostBrowser = await resolveBrowserExecutable(process.env.BROWSER_BIN || '', browserCandidates);
 const dockerBrowserImage = process.env.BROWSER_DOCKER_IMAGE || '';
 const browserRunner = hostBrowser || dockerBrowserImage ? 'available' : '';
 const browserSkip = browserRunner ? undefined : 'headless Chromium is not installed; CI installs it for this suite';
+
+test('browser process cleanup escalates and awaits child close', async () => {
+  const browser = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); process.send?.("ready"); setInterval(() => {}, 1000);'], {
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  let closed = false;
+  browser.once('close', () => {
+    closed = true;
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      browser.once('spawn', resolve);
+      browser.once('error', reject);
+    });
+    await new Promise((resolve, reject) => {
+      browser.once('message', (message) => message === 'ready' ? resolve() : reject(new Error(`unexpected child message: ${message}`)));
+      browser.once('error', reject);
+    });
+    await terminateChild(browser, 25);
+    assert.equal(closed, true);
+    assert.equal(browser.signalCode, 'SIGKILL');
+  } finally {
+    if (browser.exitCode === null && browser.signalCode === null) {
+      browser.kill('SIGKILL');
+      await new Promise((resolve) => browser.once('close', resolve));
+    }
+  }
+});
+
+test('invalid explicit BROWSER_BIN fails instead of falling back or skipping', async () => {
+  await assert.rejects(
+    resolveBrowserExecutable('/definitely/not-a-browser', browserCandidates),
+    /BROWSER_BIN is not executable: \/definitely\/not-a-browser/u,
+  );
+});
 
 test('headless browser reset confirmation gates the request and sends the server contract', { skip: browserSkip }, async () => {
   const fixture = await startFixtureServer();
@@ -67,6 +103,14 @@ async function findExecutable(explicit, candidates) {
     }
   }
   return '';
+}
+
+async function resolveBrowserExecutable(explicit, candidates) {
+  const executable = await findExecutable(explicit, explicit ? [] : candidates);
+  if (explicit && !executable) {
+    throw new Error(`BROWSER_BIN is not executable: ${explicit}`);
+  }
+  return executable;
 }
 
 function jsonResponse(response, status, value) {
@@ -231,7 +275,7 @@ async function runBrowser(port, width, height, mode) {
     const invocation = dockerBrowserImage
       ? { file: 'docker', args: ['run', '--rm', '--network', 'host', '--entrypoint', '/usr/bin/google-chrome', dockerBrowserImage, ...chromeArgs] }
       : { file: hostBrowser, args: chromeArgs };
-    browser = spawn(invocation.file, invocation.args, { cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    browser = spawn(invocation.file, invocation.args, { cwd: repositoryRoot, stdio: ['ignore', 'ignore', 'ignore'] });
     const { webSocketDebuggerUrl } = await waitForDevTools(debugPort, browser);
     const cdp = await connectDevTools(webSocketDebuggerUrl);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
@@ -244,9 +288,32 @@ async function runBrowser(port, width, height, mode) {
   } catch (error) {
     throw new Error(`headless browser failed: ${error?.stack || error}`);
   } finally {
-    browser?.kill('SIGTERM');
+    await terminateChild(browser);
     await rm(profile, { recursive: true, force: true });
   }
+}
+
+async function terminateChild(child, graceMs = 2000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+
+  let timer;
+  let closed = false;
+  const close = new Promise((resolvePromise) => {
+    child.once('close', () => {
+      closed = true;
+      resolvePromise();
+    });
+  });
+
+  child.kill('SIGTERM');
+  const timeout = new Promise((resolvePromise) => {
+    timer = setTimeout(resolvePromise, graceMs);
+    timer.unref?.();
+  });
+  await Promise.race([close, timeout]);
+  clearTimeout(timer);
+  if (!closed && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  await close;
 }
 
 async function findFreePort() {
