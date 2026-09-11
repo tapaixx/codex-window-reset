@@ -157,39 +157,136 @@ func TestManagementResponsesAndAssetsContainNoCredentialMaterial(t *testing.T) {
 	}
 
 	root := repositoryRoot(t)
-	for _, path := range []string{
-		filepath.Join(root, "web"), filepath.Join(root, "internal", "management"),
-	} {
-		var files []string
-		if err := filepath.Walk(path, func(name string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if !info.IsDir() && !strings.HasSuffix(name, "_test.go") {
-				files = append(files, name)
-			}
-			return nil
-		}); err != nil {
+	path, forbidden, err := findForbiddenCredentialBehavior(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "" {
+		t.Fatalf("forbidden credential behavior %q in %s", forbidden, filepath.Join(root, path))
+	}
+}
+
+func TestManagementCredentialScanUsesProductionBoundary(t *testing.T) {
+	const forbiddenBehavior = "localStorage"
+
+	t.Run("rejects production-like asset", func(t *testing.T) {
+		root := credentialScanFixtureRoot(t)
+		writeCredentialScanFixture(t, root, "web/modules/api.js", "const persisted = localStorage;")
+
+		path, forbidden, err := findForbiddenCredentialBehavior(root)
+		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range files {
-			body, err := os.ReadFile(name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := strings.ToLower(string(body))
-			for _, forbidden := range []string{
-				"access" + "_token",
-				"authorization: " + "bearer",
-				"management " + "key",
-				"local" + "storage",
-				"session" + "storage",
-			} {
-				if strings.Contains(text, forbidden) {
-					t.Fatalf("forbidden credential behavior %q in %s", forbidden, name)
+		if forbidden != strings.ToLower(forbiddenBehavior) {
+			t.Fatalf("forbidden behavior = %q, want %q", forbidden, strings.ToLower(forbiddenBehavior))
+		}
+		if filepath.ToSlash(path) != "web/modules/api.js" {
+			t.Fatalf("forbidden behavior path = %q, want web/modules/api.js", filepath.ToSlash(path))
+		}
+	})
+
+	t.Run("ignores test fixture", func(t *testing.T) {
+		root := credentialScanFixtureRoot(t)
+		writeCredentialScanFixture(t, root, "web/tests/api.test.mjs", "assert(localStorage);")
+
+		path, forbidden, err := findForbiddenCredentialBehavior(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path != "" || forbidden != "" {
+			t.Fatalf("test fixture was scanned: path=%q behavior=%q", path, forbidden)
+		}
+	})
+}
+
+func credentialScanFixtureRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, assetPath := range assetPaths {
+		name := strings.TrimPrefix(assetPath, "/")
+		if assetPath == "/panel" {
+			name = "panel.html"
+		}
+		writeCredentialScanFixture(t, root, filepath.Join("web", filepath.FromSlash(name)), "")
+	}
+	if err := os.MkdirAll(filepath.Join(root, "internal", "management"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func writeCredentialScanFixture(t *testing.T, root, name, body string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func findForbiddenCredentialBehavior(root string) (string, string, error) {
+	files, err := productionCredentialSourceFiles(root)
+	if err != nil {
+		return "", "", err
+	}
+	for _, path := range files {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return "", "", err
+		}
+		text := strings.ToLower(string(body))
+		for _, forbidden := range credentialBehaviorTerms() {
+			if strings.Contains(text, forbidden) {
+				relative, err := filepath.Rel(root, path)
+				if err != nil {
+					return "", "", err
 				}
+				return relative, forbidden, nil
 			}
 		}
+	}
+	return "", "", nil
+}
+
+func productionCredentialSourceFiles(root string) ([]string, error) {
+	files := make([]string, 0, len(assetPaths))
+	for _, assetPath := range assetPaths {
+		name := strings.TrimPrefix(assetPath, "/")
+		if assetPath == "/panel" {
+			name = "panel.html"
+		}
+		path := filepath.Join(root, "web", filepath.FromSlash(name))
+		if _, err := os.Stat(path); err != nil {
+			return nil, err
+		}
+		files = append(files, path)
+	}
+
+	managementRoot := filepath.Join(root, "internal", "management")
+	if err := filepath.Walk(managementRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(info.Name(), ".go") || strings.HasSuffix(info.Name(), "_test.go") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func credentialBehaviorTerms() []string {
+	return []string{
+		"access" + "_token",
+		"authorization: " + "bearer",
+		"management " + "key",
+		"local" + "storage",
+		"session" + "storage",
 	}
 }
 
