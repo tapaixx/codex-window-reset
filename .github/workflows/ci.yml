@@ -36,7 +36,16 @@ jobs:
         run: go vet ./...
 
       - name: Install Chromium for browser acceptance tests
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium
+        run: |
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Run Node tests
         run: BROWSER_BIN=/usr/bin/chromium node --test web/tests/*.test.mjs
@@ -47,7 +56,7 @@ jobs:
       - name: Install the arm64 cross compiler
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y gcc-aarch64-linux-gnu
+          sudo apt-get install --no-install-recommends -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
       - name: Build Linux arm64 plugin
         run: CC=aarch64-linux-gnu-gcc CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -buildmode=c-shared -o /tmp/codex-window-reset-arm64.so .
@@ -82,7 +91,16 @@ jobs:
           node-version: lts/*
 
       - name: Install Chromium for browser acceptance tests
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium
+        run: |
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Run format, static, and test checks
         run: |
