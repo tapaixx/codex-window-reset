@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_DIR: ${{ runner.temp }}/codex-window-reset-release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          check-latest: true
+          cache: false
+
+      - name: Set up Node LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Resolve semantic version from tag
+        id: version
+        shell: bash
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v*) ;;
+            *) printf 'release workflow requires a v-prefixed tag\n' >&2; exit 1 ;;
+          esac
+          printf 'version=%s\n' "${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run Go race tests
+        run: go test -race ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Run Node tests
+        run: node --test web/tests/*.test.mjs
+
+      - name: Install release toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-aarch64-linux-gnu unzip zip
+
+      - name: Prepare release directory
+        run: mkdir -p "$RELEASE_DIR"
+
+      - name: Build Linux amd64 plugin
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.pluginVersion=${VERSION}" -buildmode=c-shared -o "$RELEASE_DIR/codex-window-reset-linux-amd64.so" .
+
+      - name: Build Linux arm64 plugin
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: CC=aarch64-linux-gnu-gcc CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X main.pluginVersion=${VERSION}" -buildmode=c-shared -o "$RELEASE_DIR/codex-window-reset-linux-arm64.so" .
+
+      - name: Package release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/package-release.sh "$VERSION" "$RELEASE_DIR"
+
+      - name: Smoke-test release layout
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          "$GITHUB_WORKSPACE/scripts/package_release_test.sh" "$RELEASE_DIR" "$VERSION"
+        working-directory: ${{ env.RELEASE_DIR }}
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Codex Window Reset ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset_${{ steps.version.outputs.version }}_linux_amd64.zip
+            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset_${{ steps.version.outputs.version }}_linux_arm64.zip
+            ${{ runner.temp }}/codex-window-reset-release/checksums.txt
+            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-amd64.so
+            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-arm64.so
+            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-amd64.so.sha256
+            ${{ runner.temp }}/codex-window-reset-release/codex-window-reset-linux-arm64.so.sha256
