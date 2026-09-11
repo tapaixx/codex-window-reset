@@ -48,6 +48,7 @@ type Runtime struct {
 	resetGate    sync.RWMutex
 	wg           sync.WaitGroup
 	stopOnce     sync.Once
+	started      bool
 	stopped      bool
 	scheduler    *schedule.Scheduler
 
@@ -242,13 +243,20 @@ func (r *Runtime) Start() {
 	r.configMu.Lock()
 	defer r.configMu.Unlock()
 	r.mu.RLock()
-	if r.stopped {
+	if r.stopped || r.started {
 		r.mu.RUnlock()
 		return
 	}
 	scheduler := r.scheduler
 	config := cloneConfig(r.config)
 	r.mu.RUnlock()
+	r.mu.Lock()
+	if r.stopped || r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.started = true
+	r.mu.Unlock()
 	if r.deps.Audit != nil {
 		if err := r.deps.Audit.RecoverPending(r.now()); err != nil {
 			r.setStoreError(err)
@@ -272,6 +280,8 @@ func (r *Runtime) Stop() {
 	var cancel context.CancelFunc
 	var stopCancel context.CancelFunc
 	r.stopOnce.Do(func() {
+		r.configMu.Lock()
+		defer r.configMu.Unlock()
 		r.mu.Lock()
 		r.stopped = true
 		close(r.stop)
@@ -296,6 +306,19 @@ func (r *Runtime) Stop() {
 		r.resetGate.Unlock()
 	})
 	r.wg.Wait()
+}
+
+// Stopped reports whether Stop has completed its lifecycle transition. It is
+// intentionally synchronized so embedders can verify replacement and
+// shutdown without reaching into Runtime's orchestration state.
+func (r *Runtime) Stopped() bool {
+	if r == nil {
+		return true
+	}
+	r.mu.RLock()
+	stopped := r.stopped
+	r.mu.RUnlock()
+	return stopped
 }
 
 func (r *Runtime) acquireBusy(key string) bool {

@@ -1,6 +1,10 @@
 package main
 
-import "embed"
+import (
+	"embed"
+
+	"github.com/tapaixx/codex-window-reset/internal/management"
+)
 
 // EmbeddedWebAssets is passed to the management package by the native host
 // integration. Keeping the embed at the repository root lets Go include the
@@ -8,3 +12,7 @@ import "embed"
 //
 //go:embed web/* web/modules/*
 var EmbeddedWebAssets embed.FS
+
+func embeddedManagementAssets() management.Assets {
+	return management.NewAssets(EmbeddedWebAssets)
+}
