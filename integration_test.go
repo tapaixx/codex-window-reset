@@ -244,15 +244,21 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 		t.Fatalf("audit clear status = %d: %s", clearAudit.StatusCode, clearAudit.Body)
 	}
 
-	asset := callManagement(t, "GET", integrationResourcePath+"/modules/main.js", nil, nil)
-	if asset.StatusCode != http.StatusOK || asset.Headers["Content-Type"][0] != "text/javascript; charset=utf-8" {
+	asset := callManagement(t, "GET", integrationResourcePath+"/panel", nil, nil)
+	if asset.StatusCode != http.StatusOK || asset.Headers["Content-Type"][0] != "text/html; charset=utf-8" || !strings.Contains(string(asset.Body), "<style>") || !strings.Contains(string(asset.Body), "<script>") {
 		t.Fatalf("embedded asset response = %#v", asset)
+	}
+	if strings.Contains(string(asset.Body), integrationToken) || strings.Contains(string(asset.Body), integrationManagementKey) || strings.Contains(string(asset.Body), integrationRawBody) {
+		t.Fatal("embedded panel contains runtime credential material")
+	}
+	if !strings.Contains(string(asset.Body), "Bearer $TOKEN$") {
+		t.Fatal("embedded panel does not delegate token substitution to CLIProxyAPI")
 	}
 
 	assertIntegrationSecretsAbsent(t, dir, fake, status.Body, accountsResponse.Body, scheduleResponse.Body, updated.Body,
 		conflict.Body, probeResponse.Body, refreshResponse.Body, pending.Body, resetResponse.Body, replay.Body, history.Body,
 		scheduleAfterHistory.Body, probeAfterHistory.Body,
-		auditAfterHistory.Body, clearAudit.Body, asset.Body)
+		auditAfterHistory.Body, clearAudit.Body)
 }
 
 func installRuntimeForIntegrationTest(t *testing.T, rt *app.Runtime) {

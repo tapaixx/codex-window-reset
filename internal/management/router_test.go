@@ -28,9 +28,7 @@ func TestRegistrationDeclaresEveryExactRouteAndAsset(t *testing.T) {
 		"DELETE /plugins/codex-window-reset-linux-amd64/reset-audit": "",
 	})
 	assertResourcePaths(t, got.Resources, []string{
-		"/panel", "/styles.css", "/modules/api.js", "/modules/state.js",
-		"/modules/accounts.js", "/modules/schedule.js", "/modules/simulator.js",
-		"/modules/history.js", "/modules/main.js", "/modules/dashboard.js",
+		"/panel",
 	})
 	if got.Resources[0].Menu == "" {
 		t.Fatal("panel must be the menu resource")

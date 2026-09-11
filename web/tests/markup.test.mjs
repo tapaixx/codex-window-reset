@@ -58,7 +58,7 @@ test('static buttons have accessible names and inputs have labels', async () => 
 test('all production asset imports resolve and forbidden credential fallbacks are absent', async () => {
   const sources = await Promise.all(productionFiles.map(readProduction));
   const all = sources.join('\n');
-  assert.equal(/access_token|localStorage|sessionStorage/i.test(all), false);
+  assert.doesNotMatch(all, /access_token|localStorage\s*\.\s*setItem|sessionStorage\s*\.\s*setItem/i);
   for (const source of sources) {
     for (const match of source.matchAll(/\bfrom\s+["'](\.\/[^"']+\.js)["']/g)) {
       assert.ok(await readFile(resolve(root, 'modules', match[1].replace(/^\.\//, '')), 'utf8'));

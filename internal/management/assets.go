@@ -6,29 +6,11 @@ import (
 )
 
 var assetTypes = map[string]string{
-	"/panel":                "text/html; charset=utf-8",
-	"/styles.css":           "text/css; charset=utf-8",
-	"/modules/api.js":       "text/javascript; charset=utf-8",
-	"/modules/state.js":     "text/javascript; charset=utf-8",
-	"/modules/accounts.js":  "text/javascript; charset=utf-8",
-	"/modules/schedule.js":  "text/javascript; charset=utf-8",
-	"/modules/simulator.js": "text/javascript; charset=utf-8",
-	"/modules/history.js":   "text/javascript; charset=utf-8",
-	"/modules/main.js":      "text/javascript; charset=utf-8",
-	"/modules/dashboard.js": "text/javascript; charset=utf-8",
+	"/panel": "text/html; charset=utf-8",
 }
 
 var assetPaths = []string{
 	"/panel",
-	"/styles.css",
-	"/modules/api.js",
-	"/modules/state.js",
-	"/modules/accounts.js",
-	"/modules/schedule.js",
-	"/modules/simulator.js",
-	"/modules/history.js",
-	"/modules/main.js",
-	"/modules/dashboard.js",
 }
 
 // Assets reads the fixed browser asset allowlist from an injected filesystem.
@@ -51,23 +33,58 @@ func (a Assets) Read(assetPath string) ([]byte, string, error) {
 	if a.FS == nil {
 		return nil, "", fs.ErrNotExist
 	}
-	name := strings.TrimPrefix(assetPath, "/")
 	if assetPath == "/panel" {
-		name = "panel.html"
+		body, err := a.inlinePanel()
+		return body, contentType, err
 	}
+	return nil, "", fs.ErrNotExist
+}
+
+func (a Assets) read(name string) ([]byte, error) {
 	candidates := []string{name, "web/" + name}
 	var lastErr error
 	for _, candidate := range candidates {
 		body, err := fs.ReadFile(a.FS, candidate)
 		if err == nil {
-			return body, contentType, nil
+			return body, nil
 		}
 		lastErr = err
 	}
 	if lastErr == nil {
 		lastErr = fs.ErrNotExist
 	}
-	return nil, "", lastErr
+	return nil, lastErr
+}
+
+func (a Assets) inlinePanel() ([]byte, error) {
+	panel, err := a.read("panel.html")
+	if err != nil {
+		return nil, err
+	}
+	style, err := a.read("styles.css")
+	if err != nil {
+		return nil, err
+	}
+	scripts := make([]string, 0, 3)
+	for _, name := range []string{"modules/api.js", "modules/dashboard.js", "modules/main.js"} {
+		source, readErr := a.read(name)
+		if readErr != nil {
+			return nil, readErr
+		}
+		lines := strings.Split(string(source), "\n")
+		kept := lines[:0]
+		for _, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "import ") {
+				continue
+			}
+			kept = append(kept, strings.ReplaceAll(line, "export ", ""))
+		}
+		scripts = append(scripts, strings.Join(kept, "\n"))
+	}
+	html := string(panel)
+	html = strings.Replace(html, `<link rel="stylesheet" href="./styles.css">`, "<style>"+string(style)+"</style>", 1)
+	html = strings.Replace(html, `<script type="module" src="./modules/main.js"></script>`, "<script>"+strings.Join(scripts, "\n")+"</script>", 1)
+	return []byte(html), nil
 }
 
 func normalizeAssetPath(value string) string {

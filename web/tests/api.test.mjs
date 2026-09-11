@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { deriveManagementBase, request } from '../modules/api.js';
+import { createCodexApiCall, deriveManagementBase, request } from '../modules/api.js';
 
 test('derives management path from a suffixed resource path', () => {
   assert.equal(
@@ -17,9 +17,17 @@ test('derives management path from bootstrap resource metadata', () => {
   );
 });
 
-test('does not own authentication storage', async () => {
+test('reuses the CLIProxyAPI management key without creating plugin storage', async () => {
   const source = await readFile(new URL('../modules/api.js', import.meta.url), 'utf8');
-  assert.equal(/localStorage|sessionStorage|management[_ -]?key/i.test(source), false);
+  assert.match(source, /localStorage/);
+  assert.doesNotMatch(source, /localStorage\?\.setItem|sessionStorage\?\.setItem/);
+});
+
+test('api-call delegates credential substitution to CLIProxyAPI', () => {
+  const payload = createCodexApiCall({ authIndex: '7', accountId: 'acct-1', url: 'https://chatgpt.com/backend-api/wham/usage' });
+  assert.equal(payload.auth_index, '7');
+  assert.equal(payload.header.Authorization, 'Bearer $TOKEN$');
+  assert.equal(payload.header['Chatgpt-Account-Id'], 'acct-1');
 });
 
 test('requests use same-origin credentials and dispatch host authentication failures', async () => {

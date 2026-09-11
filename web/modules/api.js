@@ -12,13 +12,47 @@ const ERROR_MESSAGES = {
   idempotency_conflict: '此重置请求标识已用于其他账户。',
   reset_outcome_unknown: '重置结果未知，请查看重置审计后再决定是否操作。',
   store_corrupt: '持久化数据不可用，调度已暂停但诊断仍可继续。',
-  unauthorized: '宿主登录状态已失效，请返回宿主登录后重试。',
-  forbidden: '宿主拒绝了此操作，请返回宿主登录后重试。',
+  unauthorized: 'CLIProxyAPI 管理密钥无效或已变更，请刷新宿主管理面板后重试。',
+  forbidden: 'CLIProxyAPI 拒绝了此管理请求，请检查管理密钥权限。',
 };
 
 const HOST_MANAGEMENT_BASE = '/v0/management';
 
 let requestDispatcher = null;
+
+function decodeManagerStorage(value) {
+  if (!value || !value.startsWith('enc::v1::')) return value;
+  try {
+    const encoded = atob(value.slice(9));
+    const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}|${navigator.userAgent}`);
+    const decoded = new Uint8Array(encoded.length);
+    for (let index = 0; index < encoded.length; index += 1) decoded[index] = encoded.charCodeAt(index) ^ key[index % key.length];
+    return new TextDecoder().decode(decoded);
+  } catch { return ''; }
+}
+
+function extractManagementKey(value) {
+  let current = decodeManagerStorage(value);
+  for (let depth = 0; depth < 3 && typeof current === 'string'; depth += 1) {
+    try { current = JSON.parse(current); } catch { break; }
+  }
+  if (typeof current === 'string') return current;
+  if (!current || typeof current !== 'object') return '';
+  return current.managementKey || current.state?.managementKey || (typeof current.value === 'string' ? current.value : '');
+}
+
+export function managementKey() {
+  for (const name of ['cli-proxy-auth', 'managementKey']) {
+    const key = extractManagementKey(globalThis.localStorage?.getItem?.(name) || '');
+    if (key) return key;
+  }
+  return '';
+}
+
+function authenticatedHeaders(headers = {}) {
+  const key = managementKey();
+  return { ...(key ? { Authorization: `Bearer ${key}` } : {}), ...headers };
+}
 
 function defaultResourcePath() {
   const metadata = globalThis.document?.querySelector?.('meta[name="resource-base-path"], meta[name="resource_base_path"]');
@@ -79,7 +113,7 @@ export async function request(path, options = {}) {
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
-      ...headers,
+      ...authenticatedHeaders(headers),
     },
   };
   if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
@@ -120,7 +154,7 @@ export async function hostManagementRequest(path, options = {}) {
     ...fetchOptions,
     method,
     credentials: 'same-origin',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...headers },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...authenticatedHeaders(headers) },
   };
   if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
   const response = await fetch(`${HOST_MANAGEMENT_BASE}${endpoint}`, init);
@@ -134,8 +168,10 @@ export async function hostManagementRequest(path, options = {}) {
   return envelope?.result ?? envelope;
 }
 
-export function createCodexApiCall({ authIndex, method = 'GET', url, headers = {}, data } = {}) {
-  const payload = { auth_index: String(authIndex || '').trim(), method, url, header: headers };
+export function createCodexApiCall({ authIndex, accountId = '', method = 'GET', url, headers = {}, data } = {}) {
+  const header = { Authorization: 'Bearer $TOKEN$', 'Content-Type': 'application/json', 'User-Agent': 'codex-tui', ...headers };
+  if (accountId) header['Chatgpt-Account-Id'] = String(accountId).trim();
+  const payload = { auth_index: String(authIndex || '').trim(), method, url, header };
   if (data !== undefined) payload.data = typeof data === 'string' ? data : JSON.stringify(data);
   return payload;
 }

@@ -26,7 +26,7 @@ func TestDispatchRegistersManagementAndDynamicResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(encoded, []byte("/plugins/codex-window-reset-linux-amd64/status")) || !bytes.Contains(encoded, []byte("/modules/main.js")) {
+	if !bytes.Contains(encoded, []byte("/plugins/codex-window-reset-linux-amd64/status")) || !bytes.Contains(encoded, []byte(`"Path":"/panel"`)) || bytes.Contains(encoded, []byte("/modules/main.js")) {
 		t.Fatalf("%s", encoded)
 	}
 }

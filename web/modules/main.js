@@ -154,7 +154,7 @@ function bootPanel() {
       const refreshed = await Promise.all(keys.map(async (key) => {
         const account = state.accounts.find((item) => item.account_key === key);
         if (!account?.auth_index) throw new Error('账号缺少 auth_index');
-        const result = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', headers: { Accept: 'application/json' } }) });
+        const result = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', headers: { Accept: 'application/json' } }) });
         const statusCode = Number(result?.status_code || result?.statusCode || 0);
         if (statusCode < 200 || statusCode >= 300) throw new Error(`额度接口 HTTP ${statusCode || '-'}`);
         const body = typeof result?.body === 'string' ? result.body : result?.data ?? result;
@@ -163,7 +163,7 @@ function bootPanel() {
         if (!windows.length) throw new Error('额度接口未返回可识别窗口');
         let resetCount = null;
         try {
-          const detail = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: { Accept: 'application/json', 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' } }) });
+          const detail = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: { Accept: 'application/json', 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' } }) });
           const detailBody = typeof detail?.body === 'string' ? JSON.parse(detail.body) : detail?.body ?? detail?.data ?? detail;
           resetCount = Number(detailBody?.applicable_available_count ?? detailBody?.available_count ?? detailBody?.reset_credits_available);
           if (!Number.isFinite(resetCount)) resetCount = null;

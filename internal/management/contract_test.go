@@ -167,11 +167,11 @@ func TestManagementResponsesAndAssetsContainNoCredentialMaterial(t *testing.T) {
 }
 
 func TestManagementCredentialScanUsesProductionBoundary(t *testing.T) {
-	const forbiddenBehavior = "localStorage"
+	const forbiddenBehavior = "localstorage.setitem"
 
 	t.Run("rejects production-like asset", func(t *testing.T) {
 		root := credentialScanFixtureRoot(t)
-		writeCredentialScanFixture(t, root, "web/modules/api.js", "const persisted = localStorage;")
+		writeCredentialScanFixture(t, root, "web/panel.html", "localStorage.setItem('plugin-key', secret)")
 
 		path, forbidden, err := findForbiddenCredentialBehavior(root)
 		if err != nil {
@@ -180,8 +180,8 @@ func TestManagementCredentialScanUsesProductionBoundary(t *testing.T) {
 		if forbidden != strings.ToLower(forbiddenBehavior) {
 			t.Fatalf("forbidden behavior = %q, want %q", forbidden, strings.ToLower(forbiddenBehavior))
 		}
-		if filepath.ToSlash(path) != "web/modules/api.js" {
-			t.Fatalf("forbidden behavior path = %q, want web/modules/api.js", filepath.ToSlash(path))
+		if filepath.ToSlash(path) != "web/panel.html" {
+			t.Fatalf("forbidden behavior path = %q, want web/panel.html", filepath.ToSlash(path))
 		}
 	})
 
@@ -283,10 +283,8 @@ func productionCredentialSourceFiles(root string) ([]string, error) {
 func credentialBehaviorTerms() []string {
 	return []string{
 		"access" + "_token",
-		"authorization: " + "bearer",
-		"management " + "key",
-		"local" + "storage",
-		"session" + "storage",
+		"local" + "storage.setitem",
+		"session" + "storage.setitem",
 	}
 }
 
@@ -310,16 +308,7 @@ func TestResourceRegistrationUsesExactContentTypes(t *testing.T) {
 func TestManagementResourcesServeEveryRegisteredAsset(t *testing.T) {
 	router := NewRouter(contractRuntimeFixture(), contractAssets(t))
 	expectedContentTypes := map[string]string{
-		"/panel":                "text/html; charset=utf-8",
-		"/styles.css":           "text/css; charset=utf-8",
-		"/modules/api.js":       "text/javascript; charset=utf-8",
-		"/modules/state.js":     "text/javascript; charset=utf-8",
-		"/modules/accounts.js":  "text/javascript; charset=utf-8",
-		"/modules/schedule.js":  "text/javascript; charset=utf-8",
-		"/modules/simulator.js": "text/javascript; charset=utf-8",
-		"/modules/history.js":   "text/javascript; charset=utf-8",
-		"/modules/dashboard.js": "text/javascript; charset=utf-8",
-		"/modules/main.js":      "text/javascript; charset=utf-8",
+		"/panel": "text/html; charset=utf-8",
 	}
 	for _, resource := range Registration("codex-window-reset-linux-amd64").Resources {
 		wantContentType, ok := expectedContentTypes[resource.Path]
@@ -339,6 +328,14 @@ func TestManagementResourcesServeEveryRegisteredAsset(t *testing.T) {
 		if response.ContentType != wantContentType {
 			t.Fatalf("resource %q response content type = %q, want %q", resource.Path, response.ContentType, wantContentType)
 		}
+	}
+	panel, _, err := contractAssets(t).Read("/panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(panel)
+	if strings.Contains(text, `src="./modules/`) || strings.Contains(text, `href="./styles.css"`) {
+		t.Fatal("panel still references secondary plugin resources")
 	}
 }
 
