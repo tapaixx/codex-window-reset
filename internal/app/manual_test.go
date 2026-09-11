@@ -418,6 +418,29 @@ func TestManualProbeLimitsConcurrencyToThree(t *testing.T) {
 	waitTask7Run(t, run)
 }
 
+func TestManualProbeHistorySharesRunIDAcrossAccounts(t *testing.T) {
+	fx := newTask7Fixture(t, task7Accounts(2)...)
+	defer fx.runtime.Stop()
+	runID, err := fx.runtime.StartManualProbes(context.Background(), []string{"acct-a", "acct-b"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.probes.ReleaseAll()
+	fx.runtime.mu.RLock()
+	run := fx.runtime.run
+	fx.runtime.mu.RUnlock()
+	waitTask7Run(t, run)
+	records := fx.history.Records()
+	if len(records) != 2 {
+		t.Fatalf("records=%d, want 2", len(records))
+	}
+	for _, record := range records {
+		if record.RunID != runID {
+			t.Fatalf("record run ID=%q, want %q: %#v", record.RunID, runID, record)
+		}
+	}
+}
+
 func TestManualProbeAllowsUnavailableOverrideButRejectsDisabled(t *testing.T) {
 	fx := newTask7Fixture(t,
 		accounts.Account{Key: "a", Unavailable: true},

@@ -29,7 +29,7 @@ test('unavailable accounts require an explicit override before Health Probe', ()
     unavailableAcknowledged: false,
   });
   assert.equal(blocked.ok, false);
-  assert.equal(blocked.errorCode, 'unavailable_acknowledgement_required');
+  assert.equal(blocked.errorCode, 'account_unavailable');
   assert.equal(blocked.body, null);
 
   const allowed = prepareProbeRequest({

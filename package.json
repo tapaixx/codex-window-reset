@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "test": "node --test web/tests/*.test.mjs",
-    "check": "node --check web/modules/api.js && node --check web/modules/state.js && node --check web/modules/accounts.js && node --check web/modules/schedule.js && node --check web/modules/simulator.js && node --check web/modules/history.js && node --check web/modules/main.js"
+    "check": "node --check web/modules/api.js && node --check web/modules/state.js && node --check web/modules/accounts.js && node --check web/modules/schedule.js && node --check web/modules/simulator.js && node --check web/modules/history.js && node --check web/modules/dashboard.js && node --check web/modules/main.js"
   }
 }

@@ -24,6 +24,27 @@ func TestDefaultConfigStartsInert(t *testing.T) {
 	if got.Timezone != "Asia/Shanghai" || got.ProbeModel != "gpt-5.6-luna" || got.ProbeTimeoutSeconds != 30 {
 		t.Fatalf("unexpected defaults: %#v", got)
 	}
+	if got.WindowHours != 5 || got.HealthThresholdPercent != 80 || len(got.SkipWindowTimes) != 0 {
+		t.Fatalf("unexpected window strategy defaults: %#v", got)
+	}
+}
+
+func TestValidateConfigRejectsInvalidWindowStrategy(t *testing.T) {
+	tests := []func(*Config){
+		func(cfg *Config) { cfg.WindowHours = 0 },
+		func(cfg *Config) { cfg.WindowHours = 25 },
+		func(cfg *Config) { cfg.HealthThresholdPercent = -1 },
+		func(cfg *Config) { cfg.HealthThresholdPercent = 101 },
+		func(cfg *Config) { cfg.SkipWindowTimes = []string{"9:00"} },
+		func(cfg *Config) { cfg.SkipWindowTimes = []string{"09:00", "09:00"} },
+	}
+	for index, edit := range tests {
+		cfg := DefaultConfig()
+		edit(&cfg)
+		if err := ValidateConfig(cfg, ValidatePersisted, nil); err == nil {
+			t.Fatalf("case %d accepted invalid strategy: %#v", index, cfg)
+		}
+	}
 }
 
 func TestValidateConfigRequiresActivationFields(t *testing.T) {

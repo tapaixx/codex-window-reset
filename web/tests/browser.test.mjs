@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -90,7 +90,7 @@ test('headless browser reset confirmation gates the request and sends the server
     assert.equal(result.resetRequest.account_key, 'acct-browser');
     assert.deepEqual(Object.keys(result.resetRequest).sort(), ['account_key', 'idempotency_key']);
     assert.match(result.resetRequest.idempotency_key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
-    assert.equal(result.dialogAccount, 'b***@example.com');
+    assert.equal(result.dialogAccount, 'browser@example.com');
     assert.equal(result.dialogCredits, '2');
   } finally {
     await fixture.close();
@@ -103,7 +103,7 @@ test('headless browser responsive viewports preserve essential state without pag
     for (const width of [375, 768, 1024, 1440]) {
       const result = await runBrowser(fixture.port, width, 900, 'responsive');
       assert.equal(result.ok, true, `${width}px: ${result.error || 'browser responsive check failed'}`);
-      assert.equal(result.viewport.innerWidth, width, `${width}px viewport was not applied`);
+      assert.equal(result.viewport.innerWidth, width, `${width}px viewport was not applied: ${JSON.stringify(result.viewport)}`);
       assert.ok(result.overflow.htmlScrollWidth <= result.viewport.innerWidth, `${width}px document overflow: ${JSON.stringify(result.overflow)}`);
       assert.ok(result.overflow.bodyScrollWidth <= result.viewport.innerWidth, `${width}px body overflow: ${JSON.stringify(result.overflow)}`);
       assert.deepEqual(result.essential, { summary: true, accounts: true, accountState: true, workspace: true, controls: true }, `${width}px essential state`);
@@ -220,7 +220,7 @@ async function serveManagementFixture(request, response, path, state) {
     return;
   }
   if (request.method === 'GET' && path.endsWith('/accounts')) {
-    jsonResponse(response, 200, { ok: true, result: [{ account_key: 'acct-browser', masked_identity: 'b***@example.com', plan_label: 'Pro', disabled: false, unavailable: false, fingerprint: 'browser-fp' }] });
+    jsonResponse(response, 200, { ok: true, result: [{ account_key: 'acct-browser', email: 'browser@example.com', auth_index: '7', account_prefix: 'acct_browser', masked_identity: 'b***@example.com', plan_label: 'Pro', disabled: false, unavailable: false, fingerprint: 'browser-fp' }] });
     return;
   }
   if (request.method === 'GET' && path.endsWith('/schedule')) {
@@ -232,10 +232,13 @@ async function serveManagementFixture(request, response, path, state) {
         enabled: false,
         timezone: 'Asia/Shanghai',
         weekdays: [1, 2, 3, 4, 5],
-        work_periods: [{ start: '09:00', end: '12:00' }],
+        work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '19:00' }],
         preheat_lead_minutes: null,
         preheat_span_minutes: null,
         productivity_minutes: 60,
+        window_hours: 5,
+        health_threshold_percent: 80,
+        skip_window_times: [],
         remaining_quota_floor_percent: 20,
         remaining_window_floor_minutes: 60,
         long_window_floor_percent: 10,
@@ -245,6 +248,14 @@ async function serveManagementFixture(request, response, path, state) {
         scheduled_account_keys: [],
       },
     });
+    return;
+  }
+  if (request.method === 'GET' && path.endsWith('/quota')) {
+    jsonResponse(response, 200, { ok: true, result: [] });
+    return;
+  }
+  if (request.method === 'GET' && path.endsWith('/history')) {
+    jsonResponse(response, 200, { ok: true, result: [] });
     return;
   }
   if (request.method === 'POST' && path.endsWith('/quota/refresh')) {
@@ -299,11 +310,16 @@ async function runBrowser(port, width, height, mode) {
     browser = spawn(invocation.file, invocation.args, { cwd: repositoryRoot, detached: true, stdio: ['ignore', 'ignore', 'ignore'] });
     const { webSocketDebuggerUrl } = await waitForDevTools(debugPort, browser);
     const cdp = await connectDevTools(webSocketDebuggerUrl);
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
     await cdp.send('Page.navigate', { url: page });
     const result = await waitForBrowserResult(cdp);
+    if (process.env.SCREENSHOT_DIR) {
+      await mkdir(process.env.SCREENSHOT_DIR, { recursive: true });
+      const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+      await writeFile(join(process.env.SCREENSHOT_DIR, `${mode}-${width}.png`), Buffer.from(screenshot.data, 'base64'));
+    }
     await cdp.close();
     return result;
   } catch (error) {

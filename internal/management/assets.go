@@ -15,6 +15,7 @@ var assetTypes = map[string]string{
 	"/modules/simulator.js": "text/javascript; charset=utf-8",
 	"/modules/history.js":   "text/javascript; charset=utf-8",
 	"/modules/main.js":      "text/javascript; charset=utf-8",
+	"/modules/dashboard.js": "text/javascript; charset=utf-8",
 }
 
 var assetPaths = []string{
@@ -27,6 +28,7 @@ var assetPaths = []string{
 	"/modules/simulator.js",
 	"/modules/history.js",
 	"/modules/main.js",
+	"/modules/dashboard.js",
 }
 
 // Assets reads the fixed browser asset allowlist from an injected filesystem.

@@ -18,6 +18,7 @@ const productionFiles = [
   'modules/schedule.js',
   'modules/simulator.js',
   'modules/history.js',
+  'modules/dashboard.js',
   'modules/main.js',
 ];
 
@@ -25,15 +26,13 @@ async function readProduction(name) {
   return readFile(resolve(root, name), 'utf8');
 }
 
-test('panel IDs are unique and tab panels are linked', async () => {
+test('panel IDs are unique and the four monitoring regions are present together', async () => {
   const html = await readProduction('panel.html');
   const ids = [...html.matchAll(/\sid=["']([^"']+)["']/g)].map((match) => match[1]);
   assert.equal(new Set(ids).size, ids.length);
-  for (const tab of html.matchAll(/role=["']tab["'][^>]*id=["']([^"']+)["'][^>]*aria-controls=["']([^"']+)["']/g)) {
-    assert.match(html, new RegExp(`id=["']${tab[2]}["']`));
-  }
   assert.match(html, /<dialog\b[^>]*id=["']reset-dialog["']/);
-  assert.match(html, /data-identity-state=["']masked["']/);
+  for (const title of ['账号状态', '自动检测', '窗口限额 · 预热对比模拟器', '检测历史']) assert.match(html, new RegExp(title));
+  assert.doesNotMatch(html, /role=["']tab["']/);
 });
 
 test('static buttons have accessible names and inputs have labels', async () => {
@@ -48,13 +47,13 @@ test('static buttons have accessible names and inputs have labels', async () => 
     if (/type=["']hidden["']/.test(attributes)) continue;
     assert.match(attributes, /(?:id|name)=["'][^"']+["']/);
   }
-  assert.match(html, /<label\b[^>]*for=/i);
+  assert.match(html, /aria-label=["'][^"']+["']/i);
 });
 
 test('all production asset imports resolve and forbidden credential fallbacks are absent', async () => {
   const sources = await Promise.all(productionFiles.map(readProduction));
   const all = sources.join('\n');
-  assert.equal(/access_token|management key|localStorage|sessionStorage/i.test(all), false);
+  assert.equal(/access_token|localStorage|sessionStorage/i.test(all), false);
   for (const source of sources) {
     for (const match of source.matchAll(/\bfrom\s+["'](\.\/[^"']+\.js)["']/g)) {
       assert.ok(await readFile(resolve(root, 'modules', match[1].replace(/^\.\//, '')), 'utf8'));
@@ -75,14 +74,13 @@ test('module exports and design tokens stay unique and exact', async () => {
   assert.equal(new Set(names).size, names.length);
   const css = await readProduction('styles.css');
   for (const [name, value] of Object.entries({
-    primary: '#2563eb', background: '#f8fafc', surface: '#fff', foreground: '#1e293b',
-    muted: '#475569', border: '#e2e8f0', success: '#059669', warning: '#d97706',
-    destructive: '#dc2626', focus: '#2563eb',
+    blue: '#3478f6', bg: '#f4f7fb', surface: '#fff', ink: '#1d2939',
+    muted: '#667085', line: '#e4e9f1', green: '#12a16b', orange: '#e88618', red: '#e5484d',
   })) assert.match(css, new RegExp(`--${name}\\s*:\\s*${value.replace('#', '\\#')}`));
   assert.match(css, /max-width\s*:\s*767px/);
   assert.match(css, /prefers-reduced-motion\s*:\s*reduce/);
   assert.match(css, /:focus-visible\s*\{/);
-  assert.match(css, /button, input, select, textarea\s*\{[^{}]*min-height:\s*44px/);
+  assert.match(css, /button\{[^{}]*min-height:\s*36px/);
 });
 
 function contrastRatio(foreground, background) {

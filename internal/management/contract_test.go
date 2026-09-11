@@ -318,6 +318,7 @@ func TestManagementResourcesServeEveryRegisteredAsset(t *testing.T) {
 		"/modules/schedule.js":  "text/javascript; charset=utf-8",
 		"/modules/simulator.js": "text/javascript; charset=utf-8",
 		"/modules/history.js":   "text/javascript; charset=utf-8",
+		"/modules/dashboard.js": "text/javascript; charset=utf-8",
 		"/modules/main.js":      "text/javascript; charset=utf-8",
 	}
 	for _, resource := range Registration("codex-window-reset-linux-amd64").Resources {

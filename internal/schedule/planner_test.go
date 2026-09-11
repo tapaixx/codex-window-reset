@@ -80,6 +80,24 @@ func TestOccurrenceIDUsesLocalDatePeriodAndAccount(t *testing.T) {
 	}
 }
 
+func TestPlanDayRepeatsPreheatAcrossWindowCycle(t *testing.T) {
+	cfg := task4ValidConfig("Asia/Shanghai", "09:00", "19:00", 30, 15, []string{"acct-a"})
+	cfg.WindowHours = 5
+	occurrences, err := PlanDay(cfg, task4LocalDate(t, cfg.Timezone, "2026-09-14"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occurrences) != 2 {
+		t.Fatalf("occurrences=%d, want 2: %#v", len(occurrences), occurrences)
+	}
+	want := []string{"08:22:30", "13:22:30"}
+	for index, occurrence := range occurrences {
+		if got := occurrence.PlannedAt.In(task4LocalDate(t, cfg.Timezone, "2026-09-14").Location()).Format("15:04:05"); got != want[index] {
+			t.Fatalf("occurrence %d=%s, want %s", index, got, want[index])
+		}
+	}
+}
+
 func TestPlannerNeverDuplicatesFallbackHour(t *testing.T) {
 	cfg := task4ValidConfig("America/New_York", "03:30", "04:00", 30, 120, []string{"acct-a"})
 	cfg.Weekdays = []int{7}

@@ -1,568 +1,191 @@
-import { request, requestErrorMessage, setRequestDispatcher } from './api.js';
-import { createStore } from './state.js';
-import { renderAccounts } from './accounts.js';
-import { readScheduleDraft, renderSchedule, validateScheduleDraft } from './schedule.js';
-import { renderSimulation } from './simulator.js';
-import { renderHistory, renderResetAudit } from './history.js';
+import { request, requestErrorMessage } from './api.js';
+import { buildWindowStrategy, groupRunHistory, projectAccountRow, summarizeAccounts } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
-  let sourceRoot = parentRoot;
-  if (!sourceRoot) {
-    try {
-      const parent = parentDocument || windowRef?.parent?.document;
-      sourceRoot = parent?.documentElement;
-    } catch {
-      sourceRoot = null;
-    }
-  }
-
-  const parentTheme = () => {
-    if (!sourceRoot) return null;
-    const attribute = sourceRoot.getAttribute?.('data-theme') || sourceRoot.dataset?.theme;
-    if (attribute === 'dark' || attribute === 'light') return attribute;
-    if (sourceRoot.classList?.contains?.('dark')) return 'dark';
-    return null;
-  };
+  let source = parentRoot;
+  try { source ||= (parentDocument || windowRef?.parent?.document)?.documentElement; } catch { source = null; }
   const media = windowRef?.matchMedia?.('(prefers-color-scheme: dark)');
   const apply = () => {
-    const theme = parentTheme() || (media?.matches ? 'dark' : 'light');
-    root.setAttribute?.('data-theme', theme);
+    const parentTheme = source?.getAttribute?.('data-theme') || (source?.classList?.contains?.('dark') ? 'dark' : '');
+    root.setAttribute('data-theme', parentTheme === 'dark' || parentTheme === 'light' ? parentTheme : (media?.matches ? 'dark' : 'light'));
   };
   apply();
-
-  let observer;
-  let mediaListener;
   const Observer = windowRef?.MutationObserver || globalThis.MutationObserver;
-  if (observe && sourceRoot && Observer) {
-    observer = new Observer(apply);
-    observer.observe(sourceRoot, { attributes: true, attributeFilter: ['data-theme', 'class'] });
-  }
-  if (observe && !parentTheme() && media) {
-    mediaListener = apply;
-    if (media.addEventListener) media.addEventListener('change', mediaListener);
-    else media.addListener?.(mediaListener);
-  }
-  return () => {
-    observer?.disconnect();
-    if (mediaListener) {
-      if (media.removeEventListener) media.removeEventListener('change', mediaListener);
-      else media.removeListener?.(mediaListener);
-    }
-  };
-}
-
-function node(id) {
-  return document.getElementById(id);
-}
-
-function formatDate(value) {
-  if (!value) return 'None';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'None' : date.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
-}
-
-function earliestNextRun(nextRuns = {}) {
-  const values = Object.values(nextRuns).filter(Boolean).sort((left, right) => new Date(left) - new Date(right));
-  return values[0] || null;
+  const observer = observe && source && Observer ? new Observer(apply) : null;
+  observer?.observe(source, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+  if (observe) media?.addEventListener?.('change', apply);
+  return () => { observer?.disconnect(); media?.removeEventListener?.('change', apply); };
 }
 
 const RESET_FRESHNESS_MS = 5 * 60 * 1000;
-
 export function isResetQuotaEligible(account = {}, quota = {}, now = Date.now()) {
   const capturedAt = Date.parse(quota?.snapshot?.captured_at || '');
-  const nowTime = now instanceof Date ? now.getTime() : Number(now);
-  if (account?.unavailable || account?.disabled || quota?.refresh_error_code || quota?.stale) return false;
-  if (!quota?.snapshot?.reset_info_complete || !Number.isFinite(capturedAt)) return false;
-  const age = nowTime - capturedAt;
-  return Number.isFinite(nowTime) && age >= 0 && age <= RESET_FRESHNESS_MS;
+  const current = now instanceof Date ? now.getTime() : Number(now);
+  return Boolean(!account.disabled && !account.unavailable && !quota?.refresh_error_code && !quota?.stale
+    && quota?.snapshot?.reset_info_complete && Number.isFinite(capturedAt) && current >= capturedAt && current - capturedAt <= RESET_FRESHNESS_MS);
 }
 
-export function prepareProbeRequest({
-  accounts = [],
-  selectedAccountKeys = [],
-  quotaAcknowledged = false,
-  unavailableAcknowledged = false,
-} = {}) {
-  const keys = [...new Set((Array.isArray(selectedAccountKeys) ? selectedAccountKeys : [])
-    .map((key) => String(key || '').trim())
-    .filter(Boolean))];
+export function prepareProbeRequest({ accounts = [], selectedAccountKeys = [], unavailableAcknowledged = false } = {}) {
+  const keys = [...new Set(selectedAccountKeys.map((key) => String(key || '').trim()).filter(Boolean))];
   if (!keys.length) return { ok: false, errorCode: 'selection_required', body: null };
-
-  const selectedAccounts = (Array.isArray(accounts) ? accounts : [])
-    .filter((account) => keys.includes(String(account?.account_key || '').trim()));
-  if (selectedAccounts.some((account) => account?.disabled)) {
-    return { ok: false, errorCode: 'account_disabled', body: null };
-  }
-  if (!quotaAcknowledged) {
-    return { ok: false, errorCode: 'quota_acknowledgement_required', body: null };
-  }
-
-  const hasUnavailable = selectedAccounts.some((account) => account?.unavailable);
-  if (hasUnavailable && !unavailableAcknowledged) {
-    return { ok: false, errorCode: 'unavailable_acknowledgement_required', body: null };
-  }
-  return {
-    ok: true,
-    errorCode: null,
-    body: {
-      account_keys: keys,
-      acknowledge_quota_effect: true,
-      allow_unavailable: hasUnavailable,
-    },
-  };
+  const selected = accounts.filter((account) => keys.includes(account.account_key));
+  if (selected.some((account) => account.disabled)) return { ok: false, errorCode: 'account_disabled', body: null };
+  const unavailable = selected.some((account) => account.unavailable);
+  if (unavailable && !unavailableAcknowledged) return { ok: false, errorCode: 'account_unavailable', body: null };
+  return { ok: true, errorCode: null, body: { account_keys: keys, acknowledge_quota_effect: true, allow_unavailable: unavailable } };
 }
 
-function setText(element, value) {
-  if (element) element.textContent = String(value ?? '');
-}
+const WEEKDAYS = [['1', '一'], ['2', '二'], ['3', '三'], ['4', '四'], ['5', '五'], ['6', '六'], ['7', '日']];
+const statusLabels = { healthy: '健康', warning: '警告', disabled: '已停用' };
+const triggerLabels = { health_probe: '手动检测', preheat: '自动预热', compensation: '失败补偿' };
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+const text = (selector, value) => { const element = $(selector); if (element) element.textContent = String(value ?? ''); };
+const formatDate = (value, fallback = '--') => {
+  const date = new Date(value || '');
+  return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString('zh-CN', { hour12: false });
+};
+const formatDuration = (milliseconds) => milliseconds >= 1000 ? `${(milliseconds / 1000).toFixed(1)} 秒` : `${milliseconds || 0} ms`;
 
-function showAreaError(id, message = '') {
-  const element = node(id);
-  if (element) element.textContent = message;
-}
-
-function scheduleErrorMessage(errors) {
-  const messages = {
-    timezone: '请填写有效时区。',
-    probe_model: '请填写探测模型。',
-    preheat_lead_minutes: '启用调度前必须填写预热提前分钟数。',
-    preheat_span_minutes: '启用调度前必须填写预热持续分钟数。',
-    work_periods: '启用调度前至少需要一个工作时段。',
-    scheduled_account_keys: '启用调度前至少需要一个已安排账户。',
-  };
-  return errors.map((error) => messages[error.field] || '请检查调度配置。').join(' ');
-}
-
-function selectedKeys(state) {
-  return [...(state.selectedAccountKeys || [])];
-}
-
-function setButtonBusy(button, busy, busyLabel = 'Working...') {
-  if (!button) return;
-  if (busy) {
-    button.dataset.idleLabel = button.textContent;
-    button.textContent = busyLabel;
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-  } else {
-    button.textContent = button.dataset.idleLabel || button.textContent;
-    button.disabled = false;
-    button.removeAttribute('aria-busy');
-  }
-}
-
-async function withButton(button, busyLabel, operation) {
-  setButtonBusy(button, true, busyLabel);
-  try {
-    return await operation();
-  } finally {
-    setButtonBusy(button, false);
-  }
+function createCell(label, content, className = '') {
+  const cell = document.createElement('td');
+  cell.dataset.label = label;
+  if (className) cell.className = className;
+  if (content instanceof Node) cell.append(content); else cell.textContent = String(content ?? '--');
+  return cell;
 }
 
 function bootPanel() {
-  const store = createStore({ loading: true, accounts: [], history: [], resetAudit: [], schedule: {} });
-  const elements = {
-    connection: node('connection'),
-    summaryCards: {
-      schedule: node('summary-schedule'), accounts: node('summary-accounts'), quota: node('summary-quota'),
-      run: node('summary-run'), next: node('summary-next'),
-    },
-    accounts: node('accounts-table'),
-    selectionCount: node('selection-count'),
-    schedule: node('schedule-form'),
-    scheduleRevision: node('schedule-revision'),
-    simulation: node('simulation-output'),
-    history: node('history-output'),
-    audit: node('audit-output'),
-    feedback: node('feedback'),
-    hostLogin: node('host-login'),
-    runStatus: node('run-status'),
-    probeAcknowledgement: node('probe-acknowledgement'),
-    unavailableAcknowledgement: node('probe-unavailable-acknowledgement'),
-    unavailableAcknowledgementLabel: node('probe-unavailable-acknowledgement-label'),
-    resetDialog: node('reset-dialog'),
-    resetForm: node('reset-form'),
-    resetAccount: node('reset-account'),
-    resetCredits: node('reset-credits'),
-    resetStatus: node('reset-status'),
-    resetFeedback: node('reset-feedback'),
-    resetConfirm: node('reset-confirm'),
-    auditDialog: node('audit-dialog'),
-    auditForm: node('audit-form'),
-    auditConfirmation: node('audit-confirmation'),
-    auditFeedback: node('audit-feedback'),
-  };
-  const tabs = [...document.querySelectorAll('[data-workspace]')];
-  const panels = [...document.querySelectorAll('[data-panel]')];
-  let lastRenderedSchedule = false;
-  let lastRenderedSimulation = false;
-  let lastRenderedHistory = false;
-  let lastRenderedAudit = false;
+  const state = { status: {}, accounts: [], schedule: {}, quota: [], history: [], selected: new Set(), hidden: false, skipTimes: [], resetIntent: null };
+  syncHostTheme();
 
-  function renderCard(card, value, detail) {
-    if (!card) return;
-    setText(card.querySelector('.summary-value'), value);
-    setText(card.querySelector('.summary-detail'), detail);
+  const quotaIndex = () => Object.fromEntries(state.quota.map((item) => [item?.snapshot?.account_key || item?.account_key, item]).filter(([key]) => key));
+  const notify = (message) => { text('#feedback', message); clearTimeout(notify.timer); notify.timer = setTimeout(() => text('#feedback', ''), 3600); };
+  const showError = (selector, error) => text(selector, requestErrorMessage(error));
+  const nextRun = () => Object.values(state.status?.next_runs || {}).filter(Boolean).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+
+  function renderSummary() {
+    const summary = summarizeAccounts(state.accounts, quotaIndex());
+    text('#summary-total', summary.total); text('#summary-healthy', summary.healthy); text('#summary-warning', summary.warning); text('#summary-disabled', summary.disabled);
+    text('#summary-next', nextRun() ? formatDate(nextRun()) : '未计划');
+    text('#selection-count', `已选择 ${state.selected.size} 个账号`);
+    const allSelectable = state.accounts.filter((account) => !account.disabled);
+    const all = $('#select-all-checkbox');
+    all.checked = allSelectable.length > 0 && allSelectable.every((account) => state.selected.has(account.account_key));
+    all.indeterminate = state.selected.size > 0 && !all.checked;
   }
 
-  function renderWorkspaceTabs(state) {
-    const active = state.activeWorkspace || 'schedule';
-    tabs.forEach((tab) => {
-      const selected = tab.dataset.workspace === active;
-      tab.setAttribute('aria-selected', String(selected));
-      tab.tabIndex = selected ? 0 : -1;
-      tab.classList.toggle('is-active', selected);
-    });
-    panels.forEach((panel) => { panel.hidden = panel.dataset.panel !== active; });
+  function healthNode(value, threshold) {
+    const wrapper = document.createElement('span'); wrapper.className = 'health-meter';
+    const track = document.createElement('span'); track.className = 'health-track';
+    const fill = document.createElement('span'); fill.className = `health-fill ${value < threshold ? (value < threshold / 2 ? 'danger' : 'warning') : ''}`; fill.style.width = `${value}%`; track.append(fill);
+    const label = document.createElement('b'); label.textContent = `${value}%`; wrapper.append(track, label); return wrapper;
   }
 
-  function renderProbeAcknowledgements(state) {
-    const selected = new Set(selectedKeys(state));
-    const hasUnavailable = state.accounts.some((account) => selected.has(String(account?.account_key || '').trim()) && account?.unavailable && !account?.disabled);
-    if (elements.unavailableAcknowledgementLabel) elements.unavailableAcknowledgementLabel.hidden = !hasUnavailable;
-    if (elements.unavailableAcknowledgement) {
-      elements.unavailableAcknowledgement.disabled = !hasUnavailable;
-      // An override is scoped to the current unavailable selection. Do not
-      // let a prior override affect a later ordinary probe.
-      if (!hasUnavailable) elements.unavailableAcknowledgement.checked = false;
-      if (hasUnavailable) elements.unavailableAcknowledgement.setAttribute('aria-required', 'true');
-      else elements.unavailableAcknowledgement.removeAttribute('aria-required');
+  function renderAccounts() {
+    const body = $('#accounts-table'); body.replaceChildren();
+    const quota = quotaIndex();
+    if (!state.accounts.length) { const row = document.createElement('tr'); const cell = createCell('', '未发现 Codex 账号', 'empty-row'); cell.colSpan = 16; row.append(cell); body.append(row); renderSummary(); return; }
+    for (const account of state.accounts) {
+      const model = projectAccountRow(account, { quota: quota[account.account_key], history: state.history, hidden: state.hidden });
+      const row = document.createElement('tr'); row.dataset.accountKey = model.key;
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.selected.has(model.key); checkbox.disabled = account.disabled; checkbox.dataset.accountSelection = model.key; checkbox.setAttribute('aria-label', `选择 ${model.email}`);
+      checkbox.addEventListener('change', () => { checkbox.checked ? state.selected.add(model.key) : state.selected.delete(model.key); renderSummary(); });
+      const name = document.createElement('div'); name.className = 'account-name'; const strong = document.createElement('strong'); strong.textContent = model.email || account.masked_identity || model.key; const small = document.createElement('small'); small.textContent = model.key; name.append(strong, small);
+      const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status];
+      const actions = document.createElement('div'); actions.className = 'row-actions';
+      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.addEventListener('click', () => refreshQuota([model.key], refresh));
+      const reset = document.createElement('button'); reset.className = 'secondary-button'; reset.type = 'button'; reset.textContent = '重置'; reset.dataset.rowAction = 'reset'; reset.disabled = !isResetQuotaEligible(account, quota[model.key]); reset.addEventListener('click', () => openReset(account, quota[model.key])); actions.append(refresh, reset);
+      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('AUTH INDEX', model.authIndex, 'mono'), createCell('账号前缀', model.accountPrefix, 'mono'), createCell('套餐类型', model.plan), createCell('状态', status), createCell('健康度', healthNode(model.health, state.schedule.health_threshold_percent || 80)), createCell('配额', `${model.remaining}%`), createCell('已使用', `${model.used}%`), createCell('重置窗口', formatDate(model.resetAt)), createCell('HTTP', model.httpStatus || '--'), createCell('耗时', model.latencyMs ? `${model.latencyMs} ms` : '--'), createCell('最后检测', formatDate(model.lastCheckedAt)), createCell('配置更新时间', formatDate(model.configurationUpdatedAt)), createCell('错误原因', model.error || '--'), createCell('操作', actions));
+      body.append(row);
     }
+    renderSummary();
   }
 
-  function render(state, action = { type: 'initial' }) {
-    const status = state.status || {};
-    const run = state.currentRun ? { ...state.currentRun, ...status } : status;
-    const freshCount = state.quota.filter((item) => !item.stale).length;
-    const next = earliestNextRun(status.next_runs);
-    renderCard(elements.summaryCards.schedule, status.enabled ? 'Enabled' : 'Paused', status.store_error_code ? 'Store error' : 'Automatic preheat');
-    renderCard(elements.summaryCards.accounts, state.accounts.length, 'Discovered');
-    renderCard(elements.summaryCards.quota, `${freshCount}/${state.quota.length}`, 'Fresh snapshots');
-    renderCard(elements.summaryCards.run, run.run_id ? `${run.run_completed || 0}/${run.run_total || 0}` : 'Idle', run.run_id ? `Run ${run.run_id}` : 'No active operation');
-    renderCard(elements.summaryCards.next, formatDate(next), next ? 'Next planned occurrence' : 'Not scheduled');
-    setText(elements.scheduleRevision, state.serverSchedule?.revision ?? '-');
-    setText(elements.selectionCount, `${state.selectedAccountKeys.length} selected`);
-    setText(elements.runStatus, run.run_id ? `Run ${run.run_id}: ${run.run_completed || 0} of ${run.run_total || 0} complete.` : 'No operation is running.');
-    setText(elements.feedback, state.feedback || '');
-    renderProbeAcknowledgements(state);
-    if (elements.connection) {
-      if (state.authRequired) {
-        elements.connection.dataset.state = 'error';
-        elements.connection.textContent = 'Host login required';
-      } else if (state.loading) {
-        elements.connection.dataset.state = 'loading';
-        elements.connection.textContent = 'Connecting...';
-      } else {
-        elements.connection.dataset.state = 'ready';
-        elements.connection.textContent = 'Connected';
-      }
-    }
-    if (elements.hostLogin) elements.hostLogin.hidden = !state.authRequired;
-    const resetButton = document.querySelector('[data-action="open-reset"]');
-    const selected = selectedKeys(state);
-    const selectedQuota = selected.length === 1 ? state.quotaByAccount[selected[0]] : null;
-    const selectedAccount = selected.length === 1 ? state.accounts.find((account) => account.account_key === selected[0]) : null;
-    if (resetButton) resetButton.disabled = selected.length !== 1 || !isResetQuotaEligible(selectedAccount, selectedQuota);
-
-    const renderAccountActions = new Set(['initial', 'accounts-loaded', 'schedule-loaded', 'schedule-saved', 'restore-schedule', 'quota-refreshed', 'quota-refresh-failed', 'identity-revealed', 'history-loaded']);
-    if (renderAccountActions.has(action.type)) {
-      renderAccounts(elements.accounts, state.accounts, {
-        scheduledAccountKeys: state.draftSchedule?.scheduled_account_keys,
-        selectedAccountKeys: state.selectedAccountKeys,
-        identityRevealKeys: state.identityRevealKeys,
-        quotaByAccount: state.quotaByAccount,
-        history: state.history,
-        nextRuns: status.next_runs,
-        onSelectionChange: (accountKey, selected) => store.dispatch({ type: 'toggle-action-selection', accountKey, selected }),
-        onScheduleChange: (accountKey, scheduled) => store.dispatch({ type: 'set-scheduled-membership', accountKey, scheduled }),
-        onReveal: (accountKey) => store.dispatch({ type: 'identity-revealed', accountKey, revealed: !state.identityRevealKeys.has(accountKey) }),
-      });
-    }
-    const renderScheduleActions = new Set(['initial', 'schedule-loaded', 'schedule-saved', 'restore-schedule']);
-    if (!lastRenderedSchedule || renderScheduleActions.has(action.type)) {
-      renderSchedule(elements.schedule, state.draftSchedule, (name, value) => store.dispatch({ type: 'edit-schedule', patch: { [name]: value } }));
-      lastRenderedSchedule = true;
-    }
-    if (elements.simulation && (!lastRenderedSimulation || action.type === 'simulation-loaded' || action.type === 'quota-refreshed' || action.type === 'quota-refresh-failed')) {
-      renderSimulation(elements.simulation, state.simulation, state.quota, state.draftSchedule?.timezone || 'Asia/Shanghai');
-      lastRenderedSimulation = true;
-    }
-    if (elements.history && (!lastRenderedHistory || action.type === 'history-loaded')) {
-      renderHistory(elements.history, state.history);
-      lastRenderedHistory = true;
-    }
-    if (elements.audit && (!lastRenderedAudit || action.type === 'audit-loaded' || action.type === 'audit-cleared')) {
-      renderResetAudit(elements.audit, state.resetAudit);
-      lastRenderedAudit = true;
-    }
-    renderWorkspaceTabs(state);
-    renderResetDialog(state);
+  function setField(name, value) { const input = $(`#schedule-form [name="${name}"]`); if (input) input.value = value ?? ''; }
+  function renderWeekdays(values = []) {
+    const selected = new Set(values.map(String)); const root = $('#weekdays'); root.replaceChildren();
+    for (const [value, label] of WEEKDAYS) { const chip = document.createElement('label'); chip.className = 'weekday-chip'; const input = document.createElement('input'); input.type = 'checkbox'; input.value = value; input.checked = selected.has(value); input.addEventListener('change', renderSimulation); chip.append(input, document.createTextNode(label)); root.append(chip); }
+  }
+  function renderSkipTimes() {
+    const root = $('#skip-window-chips'); root.replaceChildren();
+    for (const value of state.skipTimes) { const chip = document.createElement('span'); chip.className = 'skip-chip'; chip.append(document.createTextNode(value)); const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `删除跳过窗口 ${value}`); remove.addEventListener('click', () => { state.skipTimes = state.skipTimes.filter((item) => item !== value); renderSkipTimes(); renderSimulation(); }); chip.append(remove); root.append(chip); }
+  }
+  function applySchedule(schedule) {
+    state.schedule = structuredClone(schedule || {}); $('#schedule-enabled').checked = Boolean(schedule.enabled); text('#schedule-revision', schedule.revision ?? '--');
+    const suggested = { preheat_lead_minutes: 30, preheat_span_minutes: 15 };
+    for (const name of ['timezone', 'window_hours', 'productivity_minutes', 'health_threshold_percent', 'preheat_lead_minutes', 'preheat_span_minutes', 'remaining_quota_floor_percent', 'remaining_window_floor_minutes', 'long_window_floor_percent', 'probe_model', 'probe_timeout_seconds']) setField(name, schedule[name] ?? suggested[name]);
+    const periods = schedule.work_periods || []; setField('work_start', periods[0]?.start || '09:00'); setField('lunch_start', periods[0]?.end || '12:00'); setField('lunch_end', periods[1]?.start || '13:30'); setField('work_end', periods[1]?.end || periods[0]?.end || '19:00');
+    renderWeekdays(schedule.weekdays || [1, 2, 3, 4, 5]); state.skipTimes = [...(schedule.skip_window_times || [])]; renderSkipTimes(); renderSimulation(); renderAccounts();
+  }
+  function readSchedule() {
+    const form = $('#schedule-form'); const value = (name) => form.elements[name]?.value || ''; const integer = (name, fallback = 0) => Number.parseInt(value(name), 10) || fallback;
+    return { ...state.schedule, enabled: $('#schedule-enabled').checked, timezone: value('timezone'), window_hours: integer('window_hours', 5), productivity_minutes: integer('productivity_minutes', 60), health_threshold_percent: integer('health_threshold_percent', 80), preheat_lead_minutes: integer('preheat_lead_minutes', 30), preheat_span_minutes: integer('preheat_span_minutes', 15), remaining_quota_floor_percent: integer('remaining_quota_floor_percent', 20), remaining_window_floor_minutes: integer('remaining_window_floor_minutes', 60), long_window_floor_percent: integer('long_window_floor_percent', 10), probe_model: value('probe_model'), probe_timeout_seconds: integer('probe_timeout_seconds', 30), weekdays: $$('#weekdays input:checked').map((input) => Number(input.value)), work_periods: [{ start: value('work_start'), end: value('lunch_start') }, { start: value('lunch_end'), end: value('work_end') }], blackout_periods: state.schedule.blackout_periods || [], skip_window_times: [...state.skipTimes], scheduled_account_keys: state.accounts.filter((account) => !account.disabled).map((account) => account.account_key) };
   }
 
-  function dispatchFeedback(message) {
-    store.dispatch({ type: 'feedback', value: message });
+  function renderSimulation() {
+    const config = readSchedule(); const result = buildWindowStrategy(config); const root = $('#simulation-output');
+    const metric = (label, value, extra = '') => `<div class="sim-metric ${extra}"><span>${label}</span><strong>${value}</strong></div>`;
+    const preheatHours = new Set(result.windows.map((window) => Number(window.preheatAt.slice(0, 2))));
+    root.innerHTML = `<div class="sim-metrics">${metric('当天总工作时长', `${(result.workMinutes / 60).toFixed(1)} 小时`)}${metric('普通检测可用', `${result.normalAvailableMinutes} 分钟`)}${metric('预热策略可用', `${result.preheatedAvailableMinutes} 分钟`)}${metric('预热后提升', `+${result.gainMinutes} 分钟`, 'gain')}</div><div class="strategy-compare"><article class="strategy-card"><h3>策略 A · 普通检测</h3><p>窗口到工作开始时才触发，空档期不补偿。</p><strong>${result.normalAvailableMinutes} 分钟可用</strong></article><article class="strategy-card recommended"><h3>策略 B · 提前预热</h3><p>提前 ${config.preheat_lead_minutes} 分钟维持每 ${config.window_hours} 小时窗口。</p><strong>${result.preheatedAvailableMinutes} 分钟可用</strong></article></div><div class="timeline-block"><div class="timeline-title"><strong>24 小时窗口时间轴</strong><span>蓝色：工作 · 绿色：预热</span></div><div class="timeline">${result.timeline.map((hour) => `<span class="${preheatHours.has(hour.hour) ? 'preheat' : hour.active ? 'active' : ''}" title="${String(hour.hour).padStart(2, '0')}:00"></span>`).join('')}</div><div class="timeline-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div></div><p class="recommendation"><strong>推荐预热时间：</strong> ${result.windows.map((window) => window.preheatAt).join('、') || '无'}　·　<strong>当前最小健康阈值：</strong> ${config.health_threshold_percent}%</p>`;
   }
 
-  function dispatchError(area, error) {
-    const message = requestErrorMessage(error);
-    store.dispatch({ type: 'error', error: error?.code || 'request_failed' });
-    showAreaError(area, message);
+  function renderHistory() {
+    const body = $('#history-output'); body.replaceChildren(); const runs = groupRunHistory(state.history);
+    if (!runs.length) { const row = document.createElement('tr'); const cell = createCell('', '暂无检测历史', 'empty-row'); cell.colSpan = 9; row.append(cell); body.append(row); return; }
+    runs.forEach((run, index) => { const row = document.createElement('tr'); const result = document.createElement('span'); result.className = `result-pill result-${run.result}`; result.textContent = run.result === 'success' ? '全部成功' : run.result === 'partial' ? '部分成功' : '检测失败'; row.append(createCell('序号', index + 1), createCell('检测时间', formatDate(run.startedAt)), createCell('触发方式', triggerLabels[run.trigger] || run.trigger), createCell('账号数', run.accounts), createCell('成功', run.succeeded), createCell('失败', run.failed), createCell('耗时', formatDuration(run.durationMs)), createCell('主要信息', run.message), createCell('操作结果', result)); body.append(row); });
   }
 
-  function currentDraft() {
-    const stateDraft = store.getState().draftSchedule || {};
-    const draft = readScheduleDraft(elements.schedule, stateDraft);
-    if (Array.isArray(stateDraft.scheduled_account_keys)) draft.scheduled_account_keys = [...stateDraft.scheduled_account_keys];
-    return draft;
+  async function loadPanel() {
+    $('#connection').dataset.state = 'loading'; text('#connection', '正在读取插件状态…');
+    const [status, accounts, schedule, quota, history] = await Promise.all([request('/status'), request('/accounts'), request('/schedule'), request('/quota'), request('/history')]);
+    state.status = status || {}; state.accounts = accounts || []; state.quota = quota || []; state.history = history || []; state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
+    applySchedule(schedule || {}); renderHistory(); $('#connection').dataset.state = 'ready'; text('#connection', '');
   }
 
-  async function loadPanel(button) {
-    await withButton(button, 'Loading...', async () => {
-      try {
-        const [status, accounts, schedule] = await Promise.all([request('/status'), request('/accounts'), request('/schedule')]);
-        store.dispatch({ type: 'status-loaded', value: status });
-        store.dispatch({ type: 'accounts-loaded', value: accounts });
-        store.dispatch({ type: 'schedule-loaded', value: schedule });
-        dispatchFeedback('Status and schedule refreshed.');
-      } catch (error) {
-        dispatchError('feedback', error);
-      }
-    });
-  }
-
-  async function refreshQuota(button) {
-    const keys = selectedKeys(store.getState());
-    if (!keys.length) {
-      showAreaError('account-feedback', '请先选择至少一个账户。');
-      return;
-    }
-    await withButton(button, 'Refreshing...', async () => {
-      store.dispatch({ type: 'quota-refresh-started', keys });
-      try {
-        const value = await request('/quota/refresh', { method: 'POST', body: { account_keys: keys } });
-        store.dispatch({ type: 'quota-refreshed', value });
-        showAreaError('account-feedback', '');
-        dispatchFeedback('Quota snapshots refreshed.');
-      } catch (error) {
-        dispatchError('account-feedback', error);
-        store.dispatch({ type: 'quota-refresh-failed', keys, error: error?.code || 'quota_refresh_failed' });
-      }
-    });
+  async function refreshQuota(keys, button) {
+    if (!keys.length) { text('#account-feedback', '请先选择账号。'); return; }
+    button && (button.disabled = true); text('#account-feedback', '');
+    try { const refreshed = await request('/quota/refresh', { method: 'POST', body: { account_keys: keys } }); const merged = quotaIndex(); for (const view of refreshed || []) merged[view?.snapshot?.account_key] = view; state.quota = Object.values(merged); renderAccounts(); notify('配额快照已刷新'); } catch (error) { showError('#account-feedback', error); } finally { button && (button.disabled = false); }
   }
 
   async function runProbe(button) {
-    const state = store.getState();
-    const prepared = prepareProbeRequest({
-      accounts: state.accounts,
-      selectedAccountKeys: selectedKeys(state),
-      quotaAcknowledged: Boolean(elements.probeAcknowledgement?.checked),
-      unavailableAcknowledged: Boolean(elements.unavailableAcknowledgement?.checked),
-    });
-    if (!prepared.ok) {
-      const messages = {
-        selection_required: '请先选择至少一个账户。',
-        account_disabled: '已停用的账户不能执行健康探测。',
-        quota_acknowledgement_required: '请先确认真实 Codex 请求可能消耗普通配额或开始 Short Window。',
-        unavailable_acknowledgement_required: '所选账户包含不可用账户，请先明确授权覆盖宿主的 Unavailable 状态。',
-      };
-      showAreaError('account-feedback', messages[prepared.errorCode] || '请检查健康探测授权。');
-      return;
-    }
-    await withButton(button, 'Starting...', async () => {
-      try {
-        const value = await request('/probes', { method: 'POST', body: prepared.body });
-        store.dispatch({ type: 'run-started', value });
-        dispatchFeedback(`Health probe run ${value?.run_id || 'started'} accepted.`);
-        const status = await request('/status');
-        store.dispatch({ type: 'status-loaded', value: status });
-      } catch (error) {
-        dispatchError('account-feedback', error);
-      }
-    });
+    const prepared = prepareProbeRequest({ accounts: state.accounts, selectedAccountKeys: [...state.selected] });
+    if (!prepared.ok) { text('#account-feedback', prepared.errorCode === 'selection_required' ? '请先选择需要检测的账号。' : '所选账号已停用或当前不可用。'); return; }
+    button.disabled = true; text('#account-feedback', '正在提交检测任务…');
+    try { const result = await request('/probes', { method: 'POST', body: prepared.body }); state.status = { ...state.status, ...result }; text('#account-feedback', ''); notify(`检测任务 ${result?.run_id || ''} 已开始；完成后的配额与结果可点击刷新查看。`); } catch (error) { showError('#account-feedback', error); } finally { button.disabled = false; }
   }
 
-  async function saveSchedule(button) {
-    const draft = currentDraft();
-    const errors = validateScheduleDraft(draft);
-    if (errors.length) {
-      showAreaError('schedule-feedback', scheduleErrorMessage(errors));
-      return;
-    }
-    await withButton(button, 'Saving...', async () => {
-      store.dispatch({ type: 'schedule-save-started' });
-      try {
-        const value = await request('/schedule', { method: 'PUT', body: draft });
-        store.dispatch({ type: 'schedule-saved', value });
-        showAreaError('schedule-feedback', '');
-        dispatchFeedback('Schedule saved.');
-      } catch (error) {
-        dispatchError('schedule-feedback', error);
-      }
-    });
+  function openReset(account, quota) {
+    const prior = state.resetIntent; const idempotencyKey = prior?.accountKey === account.account_key && prior?.status !== 'completed' ? prior.idempotencyKey : crypto.randomUUID(); state.resetIntent = { accountKey: account.account_key, idempotencyKey, status: 'ready' }; text('#reset-account', account.email || account.masked_identity || account.account_key); text('#reset-credits', quota?.snapshot?.reset_applicable_count ?? '--'); text('#reset-feedback', ''); $('#reset-dialog').showModal();
   }
-
-  async function simulate(button) {
-    const draft = currentDraft();
-    const errors = validateScheduleDraft(draft);
-    if (errors.length && draft.enabled) {
-      showAreaError('simulation-feedback', scheduleErrorMessage(errors));
-      return;
-    }
-    await withButton(button, 'Simulating...', async () => {
-      try {
-        const value = await request('/simulate', { method: 'POST', body: draft });
-        store.dispatch({ type: 'simulation-loaded', value });
-        store.dispatch({ type: 'workspace-selected', value: 'simulator' });
-        showAreaError('simulation-feedback', '');
-        dispatchFeedback('Simulation complete.');
-      } catch (error) {
-        dispatchError('simulation-feedback', error);
-      }
-    });
-  }
-
-  async function loadRecords(button) {
-    await withButton(button, 'Loading...', async () => {
-      try {
-        const [history, audit] = await Promise.all([request('/history'), request('/reset-audit')]);
-        store.dispatch({ type: 'history-loaded', value: history });
-        store.dispatch({ type: 'audit-loaded', value: audit });
-        showAreaError('records-feedback', '');
-        dispatchFeedback('History and reset audit refreshed.');
-      } catch (error) {
-        dispatchError('records-feedback', error);
-      }
-    });
-  }
-
-  async function clearHistory(button) {
-    if (!globalThis.confirm?.('Clear the latest 100 operation records?')) return;
-    await withButton(button, 'Deleting...', async () => {
-      try {
-        await request('/history', { method: 'DELETE' });
-        store.dispatch({ type: 'history-loaded', value: [] });
-        dispatchFeedback('Operation history cleared.');
-      } catch (error) {
-        dispatchError('records-feedback', error);
-      }
-    });
-  }
-
-  function renderResetDialog(state) {
-    const intent = state.resetIntent;
-    if (!intent) return;
-    const account = state.accounts.find((item) => item.account_key === intent.accountKey);
-    const quota = state.quotaByAccount[intent.accountKey];
-    setText(elements.resetAccount, account?.masked_identity || intent.accountKey);
-    setText(elements.resetCredits, quota?.snapshot?.reset_applicable_count ?? 'Unknown');
-    const status = intent.status === 'submitting' ? 'Submitting reset...' : intent.status === 'completed' ? 'Reset completed.' : intent.status === 'failed' ? 'Reset failed. The same request can be retried.' : '';
-    setText(elements.resetStatus, status);
-    showAreaError('reset-feedback', intent.error ? requestErrorMessage({ code: intent.error }) : '');
-    if (elements.resetConfirm) {
-      elements.resetConfirm.disabled = intent.status === 'submitting' || intent.status === 'completed';
-      elements.resetConfirm.textContent = intent.status === 'failed' ? 'Retry reset' : 'Confirm reset';
-    }
-  }
-
-  function openReset() {
-    const state = store.getState();
-    const keys = selectedKeys(state);
-    if (keys.length !== 1) {
-      showAreaError('account-feedback', '重置操作必须且只能选择一个账户。');
-      return;
-    }
-    const account = state.accounts.find((item) => item.account_key === keys[0]);
-    const quota = state.quotaByAccount[keys[0]];
-    if (!isResetQuotaEligible(account, quota)) {
-      showAreaError('account-feedback', '请先对该账户执行一次成功的当前配额刷新。');
-      return;
-    }
-    store.dispatch({ type: 'open-reset-intent', accountKey: keys[0] });
-    elements.resetDialog?.showModal?.();
-  }
-
   async function submitReset() {
-    const intent = store.getState().resetIntent;
-    if (!intent || intent.status === 'submitting' || intent.status === 'completed') return;
-    store.dispatch({ type: 'reset-submitted' });
-    try {
-      const result = await request('/quota/reset', { method: 'POST', body: { account_key: intent.accountKey, idempotency_key: intent.idempotencyKey } });
-      store.dispatch({ type: 'reset-finished', value: result });
-      dispatchFeedback('Quota reset completed.');
-      try {
-        const refreshed = await request('/quota/refresh', { method: 'POST', body: { account_keys: [intent.accountKey] } });
-        store.dispatch({ type: 'quota-refreshed', value: refreshed });
-      } catch (error) {
-        dispatchFeedback(`Reset completed, but the follow-up quota refresh failed: ${requestErrorMessage(error)}`);
-      }
-    } catch (error) {
-      store.dispatch({ type: 'reset-failed', error: error?.code || 'reset_outcome_unknown' });
-    }
+    const intent = state.resetIntent; if (!intent || intent.status === 'submitting') return; intent.status = 'submitting'; $('#reset-confirm').disabled = true;
+    try { await request('/quota/reset', { method: 'POST', body: { account_key: intent.accountKey, idempotency_key: intent.idempotencyKey } }); intent.status = 'completed'; await refreshQuota([intent.accountKey]); $('#reset-dialog').close(); notify('窗口重置完成'); } catch (error) { intent.status = 'failed'; showError('#reset-feedback', error); } finally { $('#reset-confirm').disabled = false; }
   }
 
-  async function clearAudit() {
-    if (elements.auditConfirmation.value !== 'DELETE AUDIT') {
-      setText(elements.auditFeedback, '请输入 DELETE AUDIT 以确认。');
-      return;
-    }
-    const button = elements.auditForm.querySelector('button[type="submit"]');
-    await withButton(button, 'Deleting...', async () => {
-      try {
-        await request('/reset-audit', { method: 'DELETE', headers: { 'X-Confirmation': 'DELETE AUDIT' } });
-        store.dispatch({ type: 'audit-cleared' });
-        elements.auditDialog.close();
-        dispatchFeedback('Reset audit cleared.');
-      } catch (error) {
-        setText(elements.auditFeedback, requestErrorMessage(error));
-      }
-    });
-  }
-
-  function activateWorkspace(value) {
-    store.dispatch({ type: 'workspace-selected', value });
-  }
-
-  document.querySelectorAll('[data-action]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const action = button.dataset.action;
-      if (action === 'refresh-panel') void loadPanel(button);
-      if (action === 'refresh-quota') void refreshQuota(button);
-      if (action === 'run-probe') void runProbe(button);
-      if (action === 'save-schedule') void saveSchedule(button);
-      if (action === 'restore-schedule') store.dispatch({ type: 'restore-schedule' });
-      if (action === 'simulate') void simulate(button);
-      if (action === 'load-records') void loadRecords(button);
-      if (action === 'clear-history') void clearHistory(button);
-      if (action === 'open-reset') openReset();
-      if (action === 'close-reset') { store.dispatch({ type: 'reset-intent-cleared' }); elements.resetDialog.close(); }
-      if (action === 'open-audit-clear') { elements.auditConfirmation.value = ''; setText(elements.auditFeedback, ''); elements.auditDialog.showModal(); }
-      if (action === 'close-audit') elements.auditDialog.close();
-    });
-  });
-
-  tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => activateWorkspace(tab.dataset.workspace));
-    tab.addEventListener('keydown', (event) => {
-      if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
-      event.preventDefault();
-      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-      tabs[next].focus();
-      activateWorkspace(tabs[next].dataset.workspace);
-    });
-  });
-
-  elements.resetForm.addEventListener('submit', (event) => { event.preventDefault(); void submitReset(); });
-  elements.auditForm.addEventListener('submit', (event) => { event.preventDefault(); void clearAudit(); });
-  elements.resetDialog.addEventListener('cancel', () => store.dispatch({ type: 'reset-intent-cleared' }));
-  elements.auditDialog.addEventListener('cancel', () => { setText(elements.auditFeedback, ''); });
-
-  store.subscribe(render);
-  setRequestDispatcher((action) => store.dispatch(action));
-  syncHostTheme();
-  render(store.getState());
-  void loadPanel();
+  $('[data-action="refresh-panel"]').addEventListener('click', (event) => loadPanel().then(() => notify('面板已刷新')).catch((error) => { $('#connection').dataset.state = 'error'; text('#connection', requestErrorMessage(error)); }));
+  $('[data-action="focus-settings"]').addEventListener('click', () => $('#settings').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  $('[data-action="show-help"]').addEventListener('click', () => $('#help-dialog').showModal());
+  $('[data-action="select-all"]').addEventListener('click', () => { state.selected = new Set(state.accounts.filter((account) => !account.disabled).map((account) => account.account_key)); renderAccounts(); });
+  $('[data-action="select-none"]').addEventListener('click', () => { state.selected.clear(); renderAccounts(); });
+  $('#select-all-checkbox').addEventListener('change', (event) => { state.selected = event.target.checked ? new Set(state.accounts.filter((account) => !account.disabled).map((account) => account.account_key)) : new Set(); renderAccounts(); });
+  $('[data-action="toggle-identities"]').addEventListener('click', (event) => { state.hidden = !state.hidden; event.currentTarget.querySelector('span').textContent = state.hidden ? '显示' : '隐藏'; renderAccounts(); });
+  $('[data-action="refresh-quota"]').addEventListener('click', (event) => refreshQuota([...state.selected], event.currentTarget));
+  $('[data-action="run-probe"]').addEventListener('click', (event) => runProbe(event.currentTarget));
+  $('[data-action="restore-schedule"]').addEventListener('click', () => applySchedule(state.schedule));
+  $('[data-action="add-skip-window"]').addEventListener('click', () => { const input = $('#skip-window-input'); if (input.value && !state.skipTimes.includes(input.value)) { state.skipTimes.push(input.value); state.skipTimes.sort(); input.value = ''; renderSkipTimes(); renderSimulation(); } });
+  $('#schedule-enabled').addEventListener('change', renderSimulation); $('#schedule-form').addEventListener('input', renderSimulation);
+  $('#schedule-form').addEventListener('submit', async (event) => { event.preventDefault(); const button = event.submitter; button.disabled = true; text('#schedule-feedback', ''); try { const saved = await request('/schedule', { method: 'PUT', headers: { 'If-Match': String(state.schedule.revision ?? 0) }, body: readSchedule() }); applySchedule(saved); notify('自动检测配置已保存'); } catch (error) { showError('#schedule-feedback', error); } finally { button.disabled = false; } });
+  $('[data-action="load-records"]').addEventListener('click', async () => { try { state.history = await request('/history'); renderHistory(); notify('检测历史已刷新'); } catch (error) { notify(requestErrorMessage(error)); } });
+  $('[data-action="clear-data"]').addEventListener('click', () => $('#clear-dialog').showModal());
+  $$('[data-action="close-clear"]').forEach((button) => button.addEventListener('click', () => $('#clear-dialog').close()));
+  $('#clear-form').addEventListener('submit', async (event) => { event.preventDefault(); try { await request('/history', { method: 'DELETE' }); state.history = []; renderAccounts(); renderHistory(); $('#clear-dialog').close(); notify('检测历史已删除'); } catch (error) { notify(requestErrorMessage(error)); } });
+  $$('[data-action="close-reset"]').forEach((button) => button.addEventListener('click', () => $('#reset-dialog').close())); $('#reset-form').addEventListener('submit', (event) => { event.preventDefault(); submitReset(); });
+  loadPanel().catch((error) => { $('#connection').dataset.state = 'error'; text('#connection', requestErrorMessage(error)); });
 }
 
-if (typeof document !== 'undefined' && document.getElementById('main-content')) bootPanel();
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootPanel, { once: true }); else bootPanel();
+}

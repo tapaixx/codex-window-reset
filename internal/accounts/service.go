@@ -18,17 +18,20 @@ import (
 // can use the host metadata type from this package without duplicating it.
 type AuthFile = host.AuthFile
 
-// Account is the safe account identity used by all management and scheduling
-// APIs.  AuthIndex is required only when obtaining credentials at an upstream
-// call boundary and is never JSON-serializable.
+// Account is the authenticated management projection. It contains the same
+// non-secret operational identity metadata shown by CLIProxyAPI's own panel,
+// but never credential material.
 type Account struct {
-	Key            string `json:"account_key"`
-	AuthIndex      string `json:"-"`
-	MaskedIdentity string `json:"masked_identity"`
-	PlanLabel      string `json:"plan_label,omitempty"`
-	Disabled       bool   `json:"disabled"`
-	Unavailable    bool   `json:"unavailable"`
-	Fingerprint    string `json:"fingerprint"`
+	Key                 string `json:"account_key"`
+	AuthIndex           string `json:"auth_index"`
+	Email               string `json:"email,omitempty"`
+	AccountPrefix       string `json:"account_prefix,omitempty"`
+	ConfigurationUpdate string `json:"configuration_updated_at,omitempty"`
+	MaskedIdentity      string `json:"masked_identity"`
+	PlanLabel           string `json:"plan_label,omitempty"`
+	Disabled            bool   `json:"disabled"`
+	Unavailable         bool   `json:"unavailable"`
+	Fingerprint         string `json:"fingerprint"`
 }
 
 // Material is short-lived upstream credential material.  It must not cross a
@@ -126,14 +129,29 @@ func Project(file AuthFile, raw json.RawMessage) (Account, error) {
 	}
 	key := accountKey(index)
 	return Account{
-		Key:            key,
-		AuthIndex:      index,
-		MaskedIdentity: maskEmail(file.Email),
-		PlanLabel:      planLabel(file),
-		Disabled:       file.Disabled,
-		Unavailable:    file.Unavailable,
-		Fingerprint:    fingerprint(key),
+		Key:                 key,
+		AuthIndex:           index,
+		Email:               strings.TrimSpace(file.Email),
+		AccountPrefix:       accountPrefix(file),
+		ConfigurationUpdate: strings.TrimSpace(file.UpdatedAt),
+		MaskedIdentity:      maskEmail(file.Email),
+		PlanLabel:           planLabel(file),
+		Disabled:            file.Disabled,
+		Unavailable:         file.Unavailable,
+		Fingerprint:         fingerprint(key),
 	}, nil
+}
+
+func accountPrefix(file AuthFile) string {
+	for _, value := range []string{file.Account, file.ID} {
+		if value = strings.TrimSpace(value); value != "" {
+			if len(value) > 16 {
+				return value[:16]
+			}
+			return value
+		}
+	}
+	return ""
 }
 
 // AuthMaterial is the sole credential extraction point.  Callers should

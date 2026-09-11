@@ -38,6 +38,19 @@ func (r *ConfigRepository) loadLocked() (domain.Config, error) {
 	if config.SchemaVersion != persistedSchemaVersion {
 		return domain.Config{}, unsupportedSchema(r.path, config.SchemaVersion)
 	}
+	// v0.0.1 development builds wrote schema 1 before window strategy fields
+	// existed. Fill only the newly introduced zero values so those local
+	// configurations remain readable without overwriting operator choices.
+	defaults := domain.DefaultConfig()
+	if config.WindowHours == 0 {
+		config.WindowHours = defaults.WindowHours
+	}
+	if config.HealthThresholdPercent == 0 {
+		config.HealthThresholdPercent = defaults.HealthThresholdPercent
+	}
+	if config.SkipWindowTimes == nil {
+		config.SkipWindowTimes = []string{}
+	}
 	return config, nil
 }
 

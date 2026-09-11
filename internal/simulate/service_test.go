@@ -84,11 +84,11 @@ func TestSimulationComparesBaselineForEachWorkPeriod(t *testing.T) {
 	if got.Baseline.IdleWindowMinutes != 30 {
 		t.Fatalf("baseline idle = %d, want 30 across both work periods", got.Baseline.IdleWindowMinutes)
 	}
-	if got.Scheduled.AvailableCoverageMinutes != 80 {
-		t.Fatalf("scheduled coverage = %d, want 80", got.Scheduled.AvailableCoverageMinutes)
+	if got.Scheduled.AvailableCoverageMinutes != 60 {
+		t.Fatalf("scheduled coverage = %d, want 60", got.Scheduled.AvailableCoverageMinutes)
 	}
-	if got.NetGainMinutes != -10 {
-		t.Fatalf("net gain = %d, want -10 after comparing both work periods", got.NetGainMinutes)
+	if got.NetGainMinutes != -30 {
+		t.Fatalf("net gain = %d, want -30 after comparing both work periods", got.NetGainMinutes)
 	}
 }
 
@@ -113,11 +113,11 @@ func TestSimulationPreservesBaselinesForAdjacentWorkPeriods(t *testing.T) {
 	if got.Baseline.IdleWindowMinutes != 15 {
 		t.Fatalf("baseline idle = %d, want 15 across adjacent work periods", got.Baseline.IdleWindowMinutes)
 	}
-	if got.Scheduled.AvailableCoverageMinutes != 45 {
-		t.Fatalf("scheduled coverage = %d, want 45", got.Scheduled.AvailableCoverageMinutes)
+	if got.Scheduled.AvailableCoverageMinutes != 60 {
+		t.Fatalf("scheduled coverage = %d, want 60", got.Scheduled.AvailableCoverageMinutes)
 	}
-	if got.NetGainMinutes != -30 {
-		t.Fatalf("net gain = %d, want -30 after comparing adjacent work periods", got.NetGainMinutes)
+	if got.NetGainMinutes != -15 {
+		t.Fatalf("net gain = %d, want -15 after comparing adjacent work periods", got.NetGainMinutes)
 	}
 }
 

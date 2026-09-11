@@ -16,6 +16,9 @@ type Config struct {
 	PreheatLeadMinutes          *int          `json:"preheat_lead_minutes"`
 	PreheatSpanMinutes          *int          `json:"preheat_span_minutes"`
 	ProductivityMinutes         int           `json:"productivity_minutes"`
+	WindowHours                 int           `json:"window_hours"`
+	HealthThresholdPercent      int           `json:"health_threshold_percent"`
+	SkipWindowTimes             []string      `json:"skip_window_times"`
 	RemainingQuotaFloorPercent  int           `json:"remaining_quota_floor_percent"`
 	RemainingWindowFloorMinutes int           `json:"remaining_window_floor_minutes"`
 	LongWindowFloorPercent      int           `json:"long_window_floor_percent"`
@@ -45,6 +48,9 @@ func DefaultConfig() Config {
 		Weekdays:                    []int{1, 2, 3, 4, 5},
 		WorkPeriods:                 []LocalPeriod{{Start: "09:00", End: "12:00"}, {Start: "13:30", End: "19:00"}},
 		ProductivityMinutes:         60,
+		WindowHours:                 5,
+		HealthThresholdPercent:      80,
+		SkipWindowTimes:             []string{},
 		RemainingQuotaFloorPercent:  20,
 		RemainingWindowFloorMinutes: 60,
 		LongWindowFloorPercent:      10,
@@ -97,6 +103,22 @@ func ValidateConfig(cfg Config, mode ValidationMode, knownAccounts map[string]st
 
 	if cfg.ProductivityMinutes <= 0 {
 		return invalid("productivity minutes must be positive")
+	}
+	if cfg.WindowHours < 1 || cfg.WindowHours > 24 {
+		return invalid("window hours must be between 1 and 24")
+	}
+	if cfg.HealthThresholdPercent < 0 || cfg.HealthThresholdPercent > 100 {
+		return invalid("health threshold percent must be between 0 and 100")
+	}
+	seenSkipTimes := make(map[string]struct{}, len(cfg.SkipWindowTimes))
+	for _, value := range cfg.SkipWindowTimes {
+		if _, err := clockMinutes(value); err != nil {
+			return invalid("skip window times must use HH:MM")
+		}
+		if _, duplicate := seenSkipTimes[value]; duplicate {
+			return invalid("skip window times must be unique")
+		}
+		seenSkipTimes[value] = struct{}{}
 	}
 	if cfg.RemainingWindowFloorMinutes <= 0 {
 		return invalid("remaining window floor minutes must be positive")

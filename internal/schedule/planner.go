@@ -50,14 +50,45 @@ func PlanDay(cfg domain.Config, date time.Time) ([]domain.PlannedOccurrence, err
 	year, month, day := date.Date()
 	dateString := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 	accounts := append([]string(nil), cfg.ScheduledAccountKeys...)
-	occurrences := make([]domain.PlannedOccurrence, 0, len(cfg.WorkPeriods)*len(accounts))
-
+	workPeriods := make([]wallInterval, 0, len(cfg.WorkPeriods))
 	for periodIndex, period := range cfg.WorkPeriods {
 		work, parseErr := parsePeriod(fmt.Sprintf("work period %d", periodIndex), period)
 		if parseErr != nil {
 			return nil, configError(parseErr.Error())
 		}
-		windowEnd := work.start - *cfg.PreheatLeadMinutes
+		workPeriods = append(workPeriods, work)
+	}
+	windowMinutes := cfg.WindowHours * 60
+	if windowMinutes <= 0 {
+		windowMinutes = 5 * 60
+	}
+	skipTimes := make(map[int]struct{}, len(cfg.SkipWindowTimes))
+	for _, value := range cfg.SkipWindowTimes {
+		minutes, parseErr := time.Parse("15:04", value)
+		if parseErr != nil || minutes.Format("15:04") != value {
+			return nil, configError("skip window times must use HH:MM")
+		}
+		skipTimes[minutes.Hour()*60+minutes.Minute()] = struct{}{}
+	}
+	anchors := make([]int, 0, len(workPeriods))
+	if len(workPeriods) > 0 {
+		for anchor := workPeriods[0].start; anchor < workPeriods[len(workPeriods)-1].end; anchor += windowMinutes {
+			insideWork := false
+			for _, work := range workPeriods {
+				if anchor >= work.start && anchor < work.end {
+					insideWork = true
+					break
+				}
+			}
+			if _, skipped := skipTimes[anchor]; insideWork && !skipped {
+				anchors = append(anchors, anchor)
+			}
+		}
+	}
+	occurrences := make([]domain.PlannedOccurrence, 0, len(anchors)*len(accounts))
+
+	for periodIndex, anchor := range anchors {
+		windowEnd := anchor - *cfg.PreheatLeadMinutes
 		windowStart := windowEnd - *cfg.PreheatSpanMinutes
 		if windowStart < 0 || windowStart >= windowEnd {
 			return nil, configError("derived preheat window must remain on the local date")

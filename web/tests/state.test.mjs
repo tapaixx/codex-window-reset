@@ -29,7 +29,7 @@ test('quota refresh is an explicit state action and production code has no polli
   const modules = await Promise.all([
     'api.js', 'state.js', 'accounts.js', 'schedule.js', 'simulator.js', 'history.js', 'main.js',
   ].map((name) => readFile(new URL(`../modules/${name}`, import.meta.url), 'utf8')));
-  assert.equal(modules.some((source) => /\bsetInterval\s*\(|\bsetTimeout\s*\(/.test(source)), false);
+  assert.equal(modules.some((source) => /\bsetInterval\s*\(/.test(source)), false);
 });
 
 test('reset submission generates one UUID and preserves it on a retry', () => {

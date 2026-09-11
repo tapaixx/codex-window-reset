@@ -1,228 +1,52 @@
 <!doctype html>
-<html lang="en" data-theme="light">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light dark">
-    <meta name="resource-base-path" content="">
-    <meta name="resource_base_path" content="">
-    <title>Codex Window Reset | Operations</title>
-    <link rel="stylesheet" href="./styles.css">
-  </head>
-  <body>
-    <a class="skip-link" href="#main-content">Skip to main content</a>
-    <header class="topbar">
-      <div class="brand-lockup">
-        <p class="eyebrow">Operations console</p>
-        <h1>Codex Window Reset</h1>
-        <p class="brand-subtitle">Account windows, schedule controls, and operation evidence</p>
-      </div>
-      <div class="topbar-actions">
-        <p class="connection" id="connection" data-state="loading" aria-live="polite">Connecting...</p>
-        <a class="host-login" id="host-login" href="/" hidden>Return to host login</a>
-      </div>
-    </header>
-
-    <main class="shell" id="main-content">
-      <section class="summary-section" aria-labelledby="summary-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">At a glance</p>
-            <h2 id="summary-title">Runtime status</h2>
-          </div>
-          <button class="button button-secondary" type="button" data-action="refresh-panel">Refresh status</button>
-        </div>
-        <div class="summary-grid" id="status-summary" aria-label="Runtime summary">
-          <article class="summary-card" id="summary-schedule">
-            <span class="summary-label">Schedule</span>
-            <strong class="summary-value">-</strong>
-            <span class="summary-detail">Waiting for status</span>
-          </article>
-          <article class="summary-card" id="summary-accounts">
-            <span class="summary-label">Accounts</span>
-            <strong class="summary-value">-</strong>
-            <span class="summary-detail">Discovered</span>
-          </article>
-          <article class="summary-card" id="summary-quota">
-            <span class="summary-label">Quota snapshots</span>
-            <strong class="summary-value">-</strong>
-            <span class="summary-detail">Explicit refresh only</span>
-          </article>
-          <article class="summary-card" id="summary-run">
-            <span class="summary-label">Current run</span>
-            <strong class="summary-value">Idle</strong>
-            <span class="summary-detail">No active operation</span>
-          </article>
-          <article class="summary-card" id="summary-next">
-            <span class="summary-label">Next occurrence</span>
-            <strong class="summary-value">-</strong>
-            <span class="summary-detail">Not scheduled</span>
-          </article>
-        </div>
-        <p class="run-status" id="run-status" aria-live="polite">No operation is running.</p>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+  <meta name="resource-base-path" content=""><meta name="resource_base_path" content="">
+  <title>Codex Window Reset</title><link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true">
+    <symbol id="i-wave" viewBox="0 0 32 32"><path d="M3 17h4l2-8 4 16 4-20 4 15 2-7 2 4h4"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 0 1 4.7.7c0 2-2.5 2.1-2.5 4M12 17h.01"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5"/><path d="M18 9a7 7 0 0 0-12-2L4 11m16 2-2 4a7 7 0 0 1-12-2"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5"/></symbol>
+  </svg>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark"><svg><use href="#i-wave"/></svg></span><div><div class="brand-title"><h1>Codex Window Reset</h1><span class="version">v0.0.1</span></div><p>配置维护 · 监控 Codex 服务健康状态，智能管理请求窗口与预热策略</p></div></div>
+    <nav class="top-actions" aria-label="页面操作"><button class="quiet-button" type="button" data-action="show-help"><svg><use href="#i-help"/></svg>使用说明</button><button class="quiet-button" type="button" data-action="focus-settings"><svg><use href="#i-settings"/></svg>设置</button><button class="primary-button" type="button" data-action="refresh-panel"><svg><use href="#i-refresh"/></svg>刷新</button></nav>
+  </header>
+  <main class="dashboard" id="main-content">
+    <p id="connection" class="connection" data-state="loading" aria-live="polite">正在连接 CLIProxyAPI…</p>
+    <section class="panel accounts-panel" aria-labelledby="accounts-title">
+      <div class="panel-heading"><div class="heading-title"><span class="section-icon section-icon-blue"><svg><use href="#i-wave"/></svg></span><div><h2 id="accounts-title">账号状态</h2><p>已发现的 Codex 账号与最近一次检测结果</p></div></div><div class="summary-strip" id="account-summary"><span><small>账号总数</small><strong id="summary-total">0</strong></span><span class="success"><small>健康</small><strong id="summary-healthy">0</strong></span><span class="warning"><small>警告</small><strong id="summary-warning">0</strong></span><span class="danger"><small>已停用</small><strong id="summary-disabled">0</strong></span><span><small>下次运行</small><strong id="summary-next">--</strong></span></div></div>
+      <div class="toolbar"><div class="toolbar-group"><button class="text-button" type="button" data-action="select-all">全选</button><button class="text-button" type="button" data-action="select-none">全不选</button><button class="text-button" type="button" data-action="toggle-identities"><svg><use href="#i-eye"/></svg><span>隐藏</span></button><span class="selection-label" id="selection-count">已选择 0 个账号</span></div><div class="toolbar-group"><button class="danger-link" type="button" data-action="clear-data"><svg><use href="#i-trash"/></svg>删除全部数据</button><button class="secondary-button" type="button" data-action="refresh-quota"><svg><use href="#i-refresh"/></svg>刷新配额</button><button class="primary-button" type="button" data-action="run-probe"><svg><use href="#i-play"/></svg>立即检测</button></div></div>
+      <p class="inline-feedback" id="account-feedback" role="alert" aria-live="polite"></p>
+      <div class="table-wrap"><table class="account-table"><thead><tr><th><input id="select-all-checkbox" type="checkbox" aria-label="选择全部账号"></th><th>账号</th><th>AUTH INDEX</th><th>账号前缀</th><th>套餐类型</th><th>状态</th><th>健康度</th><th>配额</th><th>已使用</th><th>重置窗口</th><th>HTTP</th><th>耗时</th><th>最后检测</th><th>配置更新时间</th><th>错误原因</th><th>操作</th></tr></thead><tbody id="accounts-table"></tbody></table></div>
+    </section>
+    <div class="strategy-grid">
+      <section class="panel config-panel" id="settings" aria-labelledby="config-title">
+        <div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-green"><svg><use href="#i-settings"/></svg></span><div><h2 id="config-title">自动检测</h2><p>工作日和窗口维护策略</p></div></div><label class="switch"><input id="schedule-enabled" type="checkbox"><span></span><em>启用</em></label></div>
+        <form id="schedule-form" class="config-form" novalidate>
+          <label><span>时区</span><input name="timezone" value="Asia/Shanghai" required></label><label><span>窗口周期（小时）</span><input name="window_hours" type="number" min="1" max="24" value="5"></label><label><span>单窗口预计可用时长（分钟）</span><input name="productivity_minutes" type="number" min="1" value="60"></label>
+          <label><span>工作开始</span><input name="work_start" type="time" value="09:00"></label><label><span>午休开始</span><input name="lunch_start" type="time" value="12:00"></label><label><span>午休结束</span><input name="lunch_end" type="time" value="13:30"></label><label><span>工作结束</span><input name="work_end" type="time" value="19:00"></label>
+          <label><span>最小健康阈值（%）</span><input name="health_threshold_percent" type="number" min="0" max="100" value="80"></label><label><span>预热提前（分钟）</span><input name="preheat_lead_minutes" type="number" min="1" value="30"></label><label><span>预热时长（分钟）</span><input name="preheat_span_minutes" type="number" min="1" value="15"></label>
+          <fieldset class="weekday-field"><legend>工作日</legend><div id="weekdays"></div></fieldset><fieldset class="skip-field"><legend>跳过窗口</legend><div id="skip-window-chips"></div><div class="inline-add"><input id="skip-window-input" type="time"><button class="secondary-button" data-action="add-skip-window" type="button">添加</button></div></fieldset>
+          <details><summary>高级阈值</summary><div class="advanced-grid"><label><span>短窗口剩余阈值（%）</span><input name="remaining_quota_floor_percent" type="number" min="0" max="100" value="20"></label><label><span>最小剩余窗口（分钟）</span><input name="remaining_window_floor_minutes" type="number" min="1" value="60"></label><label><span>长窗口剩余阈值（%）</span><input name="long_window_floor_percent" type="number" min="0" max="100" value="10"></label><label><span>检测模型</span><input name="probe_model" value="gpt-5.6-luna"></label><label><span>检测超时（秒）</span><input name="probe_timeout_seconds" type="number" min="5" max="120" value="30"></label></div></details>
+          <p class="inline-feedback" id="schedule-feedback" role="alert" aria-live="polite"></p><div class="form-actions"><span>配置版本 <b id="schedule-revision">--</b></span><button class="secondary-button" type="button" data-action="restore-schedule">恢复修改</button><button class="primary-button" type="submit">保存配置</button></div>
+        </form>
       </section>
-
-      <section class="surface-section accounts-section" aria-labelledby="accounts-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Inventory and operations</p>
-            <h2 id="accounts-title">Accounts</h2>
-          </div>
-          <span class="selection-count" id="selection-count" aria-live="polite">0 selected</span>
-        </div>
-        <div class="disclosure-grid">
-          <p class="disclosure" id="probe-disclosure"><strong>Health Probe:</strong> A real Codex request may consume ordinary quota or begin a Short Window.</p>
-          <p class="disclosure" id="preheat-disclosure"><strong>Preheat:</strong> A real Codex request may consume ordinary quota or begin a Short Window.</p>
-        </div>
-        <div class="operation-toolbar" aria-label="Account operations">
-          <label class="acknowledgement" for="probe-acknowledgement">
-            <input id="probe-acknowledgement" type="checkbox">
-            <span>I acknowledge the quota effect before a manual probe.</span>
-          </label>
-          <label class="acknowledgement unavailable-acknowledgement" id="probe-unavailable-acknowledgement-label" for="probe-unavailable-acknowledgement" hidden>
-            <input id="probe-unavailable-acknowledgement" type="checkbox" disabled>
-            <span>I authorize overriding host Unavailable state for the selected account(s).</span>
-          </label>
-          <div class="button-row">
-            <button class="button button-secondary" type="button" data-action="refresh-quota">Refresh selected quota</button>
-            <button class="button button-secondary" type="button" data-action="run-probe">Run health probe</button>
-            <button class="button button-danger" type="button" data-action="open-reset">Reset one account</button>
-          </div>
-        </div>
-        <p class="inline-feedback" id="account-feedback" role="alert" aria-live="polite"></p>
-        <div class="table-scroll">
-          <table class="account-table">
-            <caption class="sr-only">Account health, schedule membership, quota snapshots, and latest outcomes</caption>
-            <thead>
-              <tr>
-                <th scope="col">Account</th>
-                <th scope="col">Plan</th>
-                <th scope="col">Health</th>
-                <th scope="col">Scheduled</th>
-                <th scope="col">Short window</th>
-                <th scope="col">Long window</th>
-                <th scope="col">Reset credits</th>
-                <th scope="col">Next occurrence</th>
-                <th scope="col">Request Outcome</th>
-                <th scope="col">Window Outcome</th>
-                <th scope="col">HTTP / latency</th>
-                <th scope="col">Capture</th>
-                <th scope="col">Error</th>
-              </tr>
-            </thead>
-            <tbody id="accounts-table" data-identity-state="masked"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="workspace-section" aria-labelledby="workspace-title">
-        <div class="section-heading workspace-heading">
-          <div>
-            <p class="eyebrow">Task workspace</p>
-            <h2 id="workspace-title">Manage the operating window</h2>
-          </div>
-        </div>
-        <div class="workspace-tabs" role="tablist" aria-label="Operations workspace">
-          <button class="tab-button is-active" type="button" role="tab" id="tab-schedule" aria-controls="panel-schedule" aria-selected="true" tabindex="0" data-workspace="schedule">Schedule</button>
-          <button class="tab-button" type="button" role="tab" id="tab-simulator" aria-controls="panel-simulator" aria-selected="false" tabindex="-1" data-workspace="simulator">Simulator</button>
-          <button class="tab-button" type="button" role="tab" id="tab-records" aria-controls="panel-records" aria-selected="false" tabindex="-1" data-workspace="records">History and audit</button>
-        </div>
-
-        <section class="tab-panel" id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" data-panel="schedule">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Server revision <span id="schedule-revision">-</span></p>
-              <h3>Schedule configuration</h3>
-            </div>
-            <div class="button-row">
-              <button class="button button-secondary" type="button" data-action="restore-schedule">Restore server version</button>
-              <button class="button button-secondary" type="button" data-action="simulate">Simulate draft</button>
-              <button class="button" type="button" data-action="save-schedule">Save schedule</button>
-            </div>
-          </div>
-          <p class="inline-feedback" id="schedule-feedback" role="alert" aria-live="polite"></p>
-          <form id="schedule-form" novalidate></form>
-        </section>
-
-        <section class="tab-panel" id="panel-simulator" role="tabpanel" aria-labelledby="tab-simulator" data-panel="simulator" hidden>
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Derived view</p>
-              <h3>24-hour simulator</h3>
-            </div>
-            <button class="button" type="button" data-action="simulate">Run simulation</button>
-          </div>
-          <p class="disclosure">Simulation is calculated from the draft configuration. Assumptions and observed quota are shown separately.</p>
-          <p class="inline-feedback" id="simulation-feedback" role="alert" aria-live="polite"></p>
-          <div id="simulation-output"></div>
-        </section>
-
-        <section class="tab-panel" id="panel-records" role="tabpanel" aria-labelledby="tab-records" data-panel="records" hidden>
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Evidence</p>
-              <h3>Operation history and reset audit</h3>
-            </div>
-            <div class="button-row">
-              <button class="button button-secondary" type="button" data-action="load-records">Load latest records</button>
-              <button class="button button-secondary" type="button" data-action="clear-history">Clear history</button>
-              <button class="button button-danger" type="button" data-action="open-audit-clear">Clear reset audit</button>
-            </div>
-          </div>
-          <p class="inline-feedback" id="records-feedback" role="alert" aria-live="polite"></p>
-          <section class="record-section" aria-labelledby="history-section-title">
-            <h4 id="history-section-title">Latest 100 operations</h4>
-            <div id="history-output"></div>
-          </section>
-          <section class="record-section" aria-labelledby="audit-section-title">
-            <h4 id="audit-section-title">Reset Audit</h4>
-            <div id="audit-output"></div>
-          </section>
-        </section>
-      </section>
-
-      <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
-    </main>
-
-    <dialog id="reset-dialog" aria-labelledby="reset-dialog-title">
-      <form id="reset-form" method="dialog">
-        <div class="dialog-heading">
-          <p class="eyebrow">One-account action</p>
-          <h2 id="reset-dialog-title">Confirm quota reset</h2>
-        </div>
-        <dl class="dialog-details">
-          <div><dt>Account</dt><dd id="reset-account">-</dd></div>
-          <div><dt>Applicable credits</dt><dd id="reset-credits">-</dd></div>
-        </dl>
-        <p class="disclosure">This is a real Codex request. It may consume ordinary quota or begin a Short Window.</p>
-        <p class="dialog-status" id="reset-status" role="status" aria-live="polite"></p>
-        <p class="inline-feedback" id="reset-feedback" role="alert" aria-live="polite"></p>
-        <div class="dialog-actions">
-          <button class="button button-secondary" type="button" data-action="close-reset">Cancel</button>
-          <button class="button button-danger" id="reset-confirm" type="submit">Confirm reset</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="audit-dialog" aria-labelledby="audit-dialog-title">
-      <form id="audit-form" method="dialog">
-        <div class="dialog-heading">
-          <p class="eyebrow">Destructive action</p>
-          <h2 id="audit-dialog-title">Clear Reset Audit</h2>
-        </div>
-        <p>This removes stored reset evidence. Type <strong>DELETE AUDIT</strong> to continue.</p>
-        <div class="field">
-          <label for="audit-confirmation">Confirmation phrase</label>
-          <input id="audit-confirmation" name="audit_confirmation" type="text" autocomplete="off" required>
-        </div>
-        <p class="inline-feedback" id="audit-feedback" role="alert" aria-live="polite"></p>
-        <div class="dialog-actions">
-          <button class="button button-secondary" type="button" data-action="close-audit">Cancel</button>
-          <button class="button button-danger" type="submit">Delete audit</button>
-        </div>
-      </form>
-    </dialog>
-
-    <script type="module" src="./modules/main.js"></script>
-  </body>
+      <section class="panel simulator-panel" aria-labelledby="simulator-title"><div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-violet"><svg><use href="#i-wave"/></svg></span><div><h2 id="simulator-title">窗口限额 · 预热对比模拟器</h2><p>基于当前配置即时计算，不产生真实请求</p></div></div></div><div id="simulation-output" class="simulation-output"></div></section>
+    </div>
+    <section class="panel history-panel" aria-labelledby="history-title"><div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-orange"><svg><use href="#i-refresh"/></svg></span><div><h2 id="history-title">检测历史</h2><p>按检测批次汇总最近 100 次账号结果</p></div></div><button class="secondary-button" type="button" data-action="load-records"><svg><use href="#i-refresh"/></svg>刷新历史</button></div><div class="table-wrap"><table class="history-table"><thead><tr><th>序号</th><th>检测时间</th><th>触发方式</th><th>账号数</th><th>成功</th><th>失败</th><th>耗时</th><th>主要信息</th><th>操作结果</th></tr></thead><tbody id="history-output"></tbody></table></div></section>
+    <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
+  </main>
+  <dialog id="reset-dialog"><form id="reset-form" method="dialog"><div class="dialog-heading"><h2>重置账号窗口</h2><button type="button" class="icon-button" data-action="close-reset" aria-label="关闭">×</button></div><p>仅对所选单个账号执行。提交后使用同一幂等键重试，并由服务端 single-flight 防止并发重复消费。</p><dl><div><dt>账号</dt><dd id="reset-account">--</dd></div><div><dt>可用重置次数</dt><dd id="reset-credits">--</dd></div></dl><p id="reset-feedback" class="inline-feedback" role="alert"></p><div class="dialog-actions"><button class="secondary-button" type="button" data-action="close-reset">取消</button><button class="danger-button" id="reset-confirm" type="submit">确认重置</button></div></form></dialog>
+  <dialog id="clear-dialog"><form id="clear-form" method="dialog"><div class="dialog-heading"><h2>删除监控数据</h2><button type="button" class="icon-button" data-action="close-clear" aria-label="关闭">×</button></div><p>将清除检测历史。不会删除 CLIProxyAPI 账号、凭据或宿主配置；Reset 审计也不在此操作范围内。</p><div class="dialog-actions"><button class="secondary-button" type="button" data-action="close-clear">取消</button><button class="danger-button" type="submit">确认删除</button></div></form></dialog>
+<dialog id="help-dialog"><form method="dialog"><div class="dialog-heading"><h2>使用说明</h2><button class="icon-button" value="close" aria-label="关闭">×</button></div><ol><li>勾选账号后点击“立即检测”，检测前后会各刷新一次配额。</li><li>页面只读取插件内存中的配额快照；仅手动刷新或操作前后才访问上游。</li><li>账号“隐藏”只影响当前页面，不保存宿主鉴权信息或任何凭据。</li></ol><div class="dialog-actions"><button class="primary-button" value="close">知道了</button></div></form></dialog>
+  <script type="module" src="./modules/main.js"></script>
+</body>
 </html>

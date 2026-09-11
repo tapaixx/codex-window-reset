@@ -47,9 +47,9 @@ async function checkResetConfirmation(result) {
 
   document.querySelector('[data-action="refresh-quota"]').click();
   await waitFor(async () => (await fixtureState()).quotaRefreshRequests.length > initial.quotaRefreshRequests.length, 'quota refresh request was not sent');
-  await waitFor(() => !document.querySelector('[data-action="open-reset"]').disabled, 'reset action did not become eligible');
+  await waitFor(() => !document.querySelector('[data-row-action="reset"]').disabled, 'reset action did not become eligible');
 
-  document.querySelector('[data-action="open-reset"]').click();
+  document.querySelector('[data-row-action="reset"]').click();
   await waitFor(() => document.querySelector('#reset-dialog').open, 'reset confirmation dialog did not open');
   result.dialogAccount = document.querySelector('#reset-account').textContent;
   result.dialogCredits = document.querySelector('#reset-credits').textContent;
@@ -63,7 +63,7 @@ async function checkResetConfirmation(result) {
   const afterCancel = await fixtureState();
   if (afterCancel.resetRequests.length !== initial.resetRequests.length) throw new Error('cancel sent a reset request');
 
-  document.querySelector('[data-action="open-reset"]').click();
+  document.querySelector('[data-row-action="reset"]').click();
   await waitFor(() => document.querySelector('#reset-dialog').open, 'reset confirmation dialog did not reopen');
   document.querySelector('#reset-confirm').click();
   const final = await waitFor(async () => {
@@ -85,10 +85,11 @@ async function checkResponsiveLayout(result) {
   const accountRow = document.querySelector('#accounts-table tr');
   const accountSelection = document.querySelector('[data-account-selection]');
   const accountText = accountRow?.textContent || '';
-  const accountViewport = rect('.table-scroll');
-  const workspaceTabs = rect('.workspace-tabs');
-  const workspacePanel = rect('#panel-schedule');
-  const controls = [rect('[data-action="refresh-quota"]'), rect('[data-action="run-probe"]'), rect('[data-action="open-reset"]')];
+  const accountViewport = rect('.table-wrap');
+  const settingsPanel = rect('#settings');
+  const simulatorPanel = rect('.simulator-panel');
+  const historyPanel = rect('.history-panel');
+  const controls = [rect('[data-action="refresh-quota"]'), rect('[data-action="run-probe"]')];
   result.viewport = { innerWidth: innerWidth, innerHeight: innerHeight };
   result.overflow = {
     htmlScrollWidth: document.documentElement.scrollWidth,
@@ -97,10 +98,10 @@ async function checkResponsiveLayout(result) {
     bodyClientWidth: document.body.clientWidth,
   };
   result.essential = {
-    summary: Boolean(rect('#status-summary')?.width > 0 && rect('#summary-schedule')?.width > 0),
+    summary: Boolean(rect('#account-summary')?.width > 0 && rect('#summary-total')?.width > 0),
     accounts: Boolean(rect('#accounts-table')?.width > 0 && accountRow && accountViewport?.width > 0 && accountViewport.right <= innerWidth + 1),
-    accountState: Boolean(accountSelection && !accountSelection.disabled && accountText.includes('b***@example.com')),
-    workspace: Boolean(workspaceTabs?.width > 0 && workspaceTabs.right <= innerWidth + 1 && workspacePanel?.width > 0 && !workspacePanel.hidden),
-    controls: controls.every((control) => control && control.width > 0 && control.height >= 44 && control.left >= -1 && control.right <= innerWidth + 1),
+    accountState: Boolean(accountSelection && !accountSelection.disabled && accountText.includes('browser@example.com')),
+    workspace: Boolean(settingsPanel?.width > 0 && simulatorPanel?.width > 0 && historyPanel?.width > 0),
+    controls: controls.every((control) => control && control.width > 0 && control.height >= 36 && control.left >= -1 && control.right <= innerWidth + 1),
   };
 }

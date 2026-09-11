@@ -35,19 +35,24 @@ func (*fakeHost) HTTPDo(context.Context, host.HTTPRequest) (host.HTTPResponse, e
 
 func (*fakeHost) Log(context.Context, string, string, map[string]any) {}
 
-func TestAccountProjectionNeverContainsToken(t *testing.T) {
+func TestAccountProjectionExposesAuthenticatedOperationalMetadataButNeverToken(t *testing.T) {
 	raw := json.RawMessage(`{"access_token":"secret","account_id":"acct-upstream"}`)
-	view, err := Project(AuthFile{AuthIndex: "7", Email: "alice@example.com", Provider: "codex"}, raw)
+	view, err := Project(AuthFile{AuthIndex: "7", Email: "alice@example.com", Account: "acct-upstream", Provider: "codex", UpdatedAt: "2026-09-11T01:02:03Z"}, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(view)
-	if bytes.Contains(encoded, []byte("secret")) || bytes.Contains(encoded, []byte("alice@example.com")) {
+	if bytes.Contains(encoded, []byte("secret")) {
 		t.Fatalf("leaked: %s", encoded)
 	}
-	for _, forbidden := range []string{"access_token", "AuthIndex", "auth_index", "fixture-token"} {
+	for _, forbidden := range []string{"access_token", "fixture-token"} {
 		if bytes.Contains(encoded, []byte(forbidden)) {
 			t.Fatalf("encoded account contains %q: %s", forbidden, encoded)
+		}
+	}
+	for _, required := range []string{`"email":"alice@example.com"`, `"auth_index":"7"`, `"account_prefix":"acct-upstream"`, `"configuration_updated_at":"2026-09-11T01:02:03Z"`} {
+		if !bytes.Contains(encoded, []byte(required)) {
+			t.Fatalf("encoded account missing %s: %s", required, encoded)
 		}
 	}
 }
@@ -168,7 +173,7 @@ func TestAuthMaterialReturnsSanitizedCredentialError(t *testing.T) {
 }
 
 func TestSecretBearingFieldsCarryJSONDashTags(t *testing.T) {
-	for typ, field := range map[string]string{"Account": "AuthIndex", "Material": "AccessToken"} {
+	for typ, field := range map[string]string{"Material": "AccessToken"} {
 		var tag reflect.StructTag
 		switch typ {
 		case "Account":

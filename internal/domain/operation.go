@@ -15,6 +15,7 @@ const (
 
 type OperationRecord struct {
 	ID             string           `json:"id"`
+	RunID          string           `json:"run_id,omitempty"`
 	CorrelationID  string           `json:"correlation_id"`
 	Trigger        OperationTrigger `json:"trigger"`
 	OccurrenceID   string           `json:"occurrence_id,omitempty"`

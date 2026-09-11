@@ -265,7 +265,7 @@ func (r *Runtime) runManual(ctx context.Context, run *runState, selected []accou
 		go func() {
 			defer workerWG.Done()
 			for account := range jobs {
-				r.executeManual(ctx, account, allowUnavailable)
+				r.executeManual(ctx, run.id, account, allowUnavailable)
 				r.completeOne(run)
 			}
 		}()
@@ -312,25 +312,26 @@ func (r *Runtime) finishRun(run *runState) {
 	r.mu.Unlock()
 }
 
-func (r *Runtime) executeManual(ctx context.Context, account accounts.Account, allowUnavailable bool) {
+func (r *Runtime) executeManual(ctx context.Context, runID string, account accounts.Account, allowUnavailable bool) {
 	current, err := r.deps.Accounts.Find(ctx, account.Key)
 	if err != nil {
-		r.recordManualEligibility(account, domain.CodeAccountUnavailable)
+		r.recordManualEligibility(runID, account, domain.CodeAccountUnavailable)
 		return
 	}
 	current.Key = normalizeKey(account.Key)
 	if current.Disabled {
-		r.recordManualEligibility(current, domain.CodeAccountDisabled)
+		r.recordManualEligibility(runID, current, domain.CodeAccountDisabled)
 		return
 	}
 	if current.Unavailable && !allowUnavailable {
-		r.recordManualEligibility(current, domain.CodeAccountUnavailable)
+		r.recordManualEligibility(runID, current, domain.CodeAccountUnavailable)
 		return
 	}
 	account = current
 
 	if !r.acquireBusy(account.Key) {
 		record := operationBase(r, domain.TriggerHealthProbe, "", account)
+		record.RunID = runID
 		record.RequestOutcome = domain.RequestResponseError
 		record.WindowOutcome = domain.WindowNotObserved
 		record.ErrorCode = domain.CodeAccountBusy
@@ -353,6 +354,7 @@ func (r *Runtime) executeManual(ctx context.Context, account accounts.Account, a
 	after, _ := r.refreshSnapshot(ctx, account)
 
 	record := operationBaseAt(r, domain.TriggerHealthProbe, "", account, started)
+	record.RunID = runID
 	record.RequestOutcome = result.Outcome
 	record.WindowOutcome = classifyWindow(result.Outcome, before, after)
 	record.HTTPStatus = result.HTTPStatus
@@ -368,8 +370,9 @@ func (r *Runtime) executeManual(ctx context.Context, account accounts.Account, a
 	r.appendHistory(record)
 }
 
-func (r *Runtime) recordManualEligibility(account accounts.Account, code domain.ErrorCode) {
+func (r *Runtime) recordManualEligibility(runID string, account accounts.Account, code domain.ErrorCode) {
 	record := operationBase(r, domain.TriggerHealthProbe, "", account)
+	record.RunID = runID
 	record.RequestOutcome = domain.RequestDisabled
 	record.WindowOutcome = domain.WindowNotObserved
 	record.ErrorCode = code

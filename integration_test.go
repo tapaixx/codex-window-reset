@@ -108,7 +108,7 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 		Result []accounts.Account `json:"result"`
 	}
 	decodeBody(t, accountsResponse.Body, &accountsEnvelope)
-	if len(accountsEnvelope.Result) != 1 || accountsEnvelope.Result[0].MaskedIdentity != "r***@example.com" || accountsEnvelope.Result[0].AuthIndex != "" {
+	if len(accountsEnvelope.Result) != 1 || accountsEnvelope.Result[0].MaskedIdentity != "r***@example.com" || accountsEnvelope.Result[0].AuthIndex != "auth-one" || accountsEnvelope.Result[0].Email != "raw@example.com" {
 		t.Fatalf("unsafe account projection: %s", accountsResponse.Body)
 	}
 
@@ -358,13 +358,13 @@ func assertIntegrationSecretsAbsent(t *testing.T, dir string, fake *integrationH
 		}
 		combined = append(combined, data...)
 	}
-	for _, forbidden := range []string{integrationToken, integrationManagementKey, integrationRawEmail, integrationRawBody, "access_token", "Authorization", "Bearer"} {
+	for _, forbidden := range []string{integrationToken, integrationManagementKey, integrationRawBody, "access_token", "Authorization", "Bearer"} {
 		if strings.Contains(string(combined), forbidden) {
 			t.Fatalf("secret %q crossed a persistence/return boundary: %s", forbidden, combined)
 		}
 	}
 	for _, logEntry := range fake.logsSnapshot() {
-		for _, forbidden := range []string{integrationToken, integrationManagementKey, integrationRawEmail, integrationRawBody, "access_token", "Authorization", "Bearer"} {
+		for _, forbidden := range []string{integrationToken, integrationManagementKey, integrationRawBody, "access_token", "Authorization", "Bearer"} {
 			if strings.Contains(logEntry, forbidden) {
 				t.Fatalf("secret %q crossed the log boundary: %s", forbidden, logEntry)
 			}

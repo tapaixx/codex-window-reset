@@ -72,8 +72,11 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 			continue
 		}
 		scheduledWindows = append(scheduledWindows, clipInterval(timeInterval{
-			start: occurrence.PlannedAt,
-			end:   occurrence.PlannedAt.Add(productivity),
+			// A preheat request establishes the next request window at the
+			// configured lead boundary; model availability from that boundary,
+			// rather than counting the preheat request itself as work time.
+			start: occurrence.WindowEnd.Add(time.Duration(maxInt(cfg.PreheatLeadMinutes, 0)) * time.Minute),
+			end:   occurrence.WindowEnd.Add(time.Duration(maxInt(cfg.PreheatLeadMinutes, 0))*time.Minute + productivity),
 		}, dayStart, dayEnd))
 	}
 	baselineWindows = mergeIntervals(baselineWindows)
@@ -99,6 +102,13 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 		TimelineSegments: timelineSegments(dayStart, dayEnd, work, occurrences),
 		Assumptions:      map[string]int{"productivity_minutes": cfg.ProductivityMinutes},
 	}, nil
+}
+
+func maxInt(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 type timeInterval struct {

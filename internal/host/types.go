@@ -44,6 +44,7 @@ type AuthFile struct {
 	Account        string `json:"account,omitempty"`
 	Plan           string `json:"-"`
 	PlanLabel      string `json:"plan_label,omitempty"`
+	UpdatedAt      string `json:"updated_at,omitempty"`
 	Disabled       bool   `json:"disabled"`
 	Unavailable    bool   `json:"unavailable"`
 }
@@ -72,6 +73,7 @@ func (f *AuthFile) UnmarshalJSON(data []byte) error {
 		Account:        firstString(object, "account", "Account"),
 		Plan:           firstString(object, "plan", "Plan"),
 		PlanLabel:      firstString(object, "plan_label", "planLabel", "PlanLabel", "plan"),
+		UpdatedAt:      firstString(object, "updated_at", "updatedAt", "UpdatedAt", "modified_at", "modifiedAt", "ModifiedAt"),
 		Disabled:       firstBool(object, "disabled", "Disabled"),
 		Unavailable:    firstBool(object, "unavailable", "Unavailable"),
 	}
