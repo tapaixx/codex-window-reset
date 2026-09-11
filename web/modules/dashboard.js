@@ -126,11 +126,15 @@ export function buildWindowStrategy(config = {}) {
       if (!containingPeriod) continue;
       const workStart = clockLabel(cursor);
       if (skip.has(workStart)) continue;
-      windows.push({ workStart, preheatAt: clockLabel(cursor - lead), expiresAt: clockLabel(cursor + windowMinutes) });
+      windows.push({ workStart, preheatAt: clockLabel(cursor - lead), expiresAt: clockLabel(cursor + windowMinutes), anchorMinute: cursor, preheatMinute: cursor - lead });
     }
   }
   const normalAvailableMinutes = Math.min(workMinutes, windows.length * usableMinutes);
   const preheatedAvailableMinutes = Math.min(workMinutes, normalAvailableMinutes + Math.max(0, windows.length - 1) * Math.min(lead, usableMinutes));
   const timeline = Array.from({ length: 24 }, (_, hour) => ({ hour, active: periods.some((period) => hour * 60 < period.end && (hour + 1) * 60 > period.start) }));
-  return { workMinutes, windowMinutes, windows, normalAvailableMinutes, preheatedAvailableMinutes, gainMinutes: preheatedAvailableMinutes - normalAvailableMinutes, timeline };
+  const workBands = periods.map((period) => ({ startMinute: period.start, endMinute: period.end, label: `${clockLabel(period.start)}–${clockLabel(period.end)}` }));
+  const breakBands = periods.slice(0, -1).map((period, index) => ({ startMinute: period.end, endMinute: periods[index + 1].start, label: `午休 ${clockLabel(period.end)}–${clockLabel(periods[index + 1].start)}` })).filter((band) => band.endMinute > band.startMinute);
+  const normalBands = windows.map((window) => ({ startMinute: window.anchorMinute, endMinute: Math.min(1440, window.anchorMinute + usableMinutes), label: `${clockLabel(window.anchorMinute)}–${clockLabel(window.anchorMinute + usableMinutes)}` }));
+  const preheatBands = windows.map((window) => ({ startMinute: window.preheatMinute, endMinute: Math.min(1440, window.anchorMinute + usableMinutes), anchorMinute: window.anchorMinute, label: `${clockLabel(window.preheatMinute)} 预热` }));
+  return { workMinutes, windowMinutes, windows, normalAvailableMinutes, preheatedAvailableMinutes, gainMinutes: preheatedAvailableMinutes - normalAvailableMinutes, timeline, workBands, breakBands, normalBands, preheatBands };
 }

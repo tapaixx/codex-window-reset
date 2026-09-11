@@ -69,4 +69,11 @@ test('window strategy models repeated five-hour windows, lunch and preheat gain'
   assert.deepEqual(result.windows.map((window) => window.preheatAt), ['08:30', '13:30']);
   assert.ok(result.preheatedAvailableMinutes > result.normalAvailableMinutes);
   assert.equal(result.timeline.length, 24);
+  assert.deepEqual(result.workBands, [
+    { startMinute: 540, endMinute: 720, label: '09:00–12:00' },
+    { startMinute: 810, endMinute: 1140, label: '13:30–19:00' },
+  ]);
+  assert.deepEqual(result.breakBands, [{ startMinute: 720, endMinute: 810, label: '午休 12:00–13:30' }]);
+  assert.deepEqual(result.normalBands.map((band) => band.label), ['09:00–10:00', '14:00–15:00']);
+  assert.deepEqual(result.preheatBands.map((band) => band.label), ['08:30 预热', '13:30 预热']);
 });
