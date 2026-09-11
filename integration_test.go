@@ -213,9 +213,30 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 	if history.StatusCode != http.StatusOK || strings.Contains(string(history.Body), "health_probe") {
 		t.Fatalf("ordinary history was not cleared: %d %s", history.StatusCode, history.Body)
 	}
+	scheduleAfterHistory := callManagement(t, "GET", integrationPluginPath+"/schedule", nil, nil)
+	var scheduleAfterHistoryEnvelope struct {
+		Result domain.Config `json:"result"`
+	}
+	decodeBody(t, scheduleAfterHistory.Body, &scheduleAfterHistoryEnvelope)
+	if scheduleAfterHistory.StatusCode != http.StatusOK || !scheduleAfterHistoryEnvelope.Result.Enabled || scheduleAfterHistoryEnvelope.Result.Revision != updatedEnvelope.Result.Revision {
+		t.Fatalf("ordinary history clear changed configuration: %d %s", scheduleAfterHistory.StatusCode, scheduleAfterHistory.Body)
+	}
 	auditAfterHistory := callManagement(t, "GET", integrationPluginPath+"/reset-audit", nil, nil)
 	if !strings.Contains(string(auditAfterHistory.Body), integrationResetKey) {
 		t.Fatalf("ordinary history clear deleted reset audit: %s", auditAfterHistory.Body)
+	}
+	authCallsBeforeHistoryProbe := fake.authCalls()
+	probeAfterHistory := callManagement(t, "POST", integrationPluginPath+"/probes", map[string]any{
+		"account_keys":             []string{"acct-auth-one"},
+		"acknowledge_quota_effect": true,
+	}, map[string][]string{"Content-Type": {"application/json"}})
+	if probeAfterHistory.StatusCode != http.StatusAccepted {
+		t.Fatalf("host credential was not usable after history clear: %d %s", probeAfterHistory.StatusCode, probeAfterHistory.Body)
+	}
+	waitForHistory(t, rt, 1)
+	remainingHistory, err := rt.ListHistory()
+	if err != nil || len(remainingHistory) != 1 || remainingHistory[0].RequestOutcome != domain.RequestSucceeded || fake.authCalls() <= authCallsBeforeHistoryProbe {
+		t.Fatalf("history clear crossed host credential boundary: records=%#v auth_calls=%d/%d err=%v", remainingHistory, fake.authCalls(), authCallsBeforeHistoryProbe, err)
 	}
 
 	clearAudit := callManagement(t, "DELETE", integrationPluginPath+"/reset-audit", nil, map[string][]string{"X-Confirmation": {"DELETE AUDIT"}})
@@ -230,6 +251,7 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 
 	assertIntegrationSecretsAbsent(t, dir, fake, status.Body, accountsResponse.Body, scheduleResponse.Body, updated.Body,
 		conflict.Body, probeResponse.Body, refreshResponse.Body, pending.Body, resetResponse.Body, replay.Body, history.Body,
+		scheduleAfterHistory.Body, probeAfterHistory.Body,
 		auditAfterHistory.Body, clearAudit.Body, asset.Body)
 }
 
@@ -359,6 +381,7 @@ type integrationHost struct {
 	consumeEntered chan struct{}
 	releaseConsume chan struct{}
 	consumeCount   int
+	authCount      int
 	consumeOnce    sync.Once
 }
 
@@ -396,6 +419,7 @@ func (h *integrationHost) ListAuthFiles(context.Context) ([]host.AuthFile, error
 func (h *integrationHost) GetAuth(_ context.Context, authIndex string) (json.RawMessage, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.authCount++
 	raw, ok := h.auth[authIndex]
 	if !ok {
 		return nil, errors.New("auth fixture unavailable")
@@ -451,6 +475,12 @@ func (h *integrationHost) consumeCalls() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.consumeCount
+}
+
+func (h *integrationHost) authCalls() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.authCount
 }
 
 func (h *integrationHost) logsSnapshot() []string {

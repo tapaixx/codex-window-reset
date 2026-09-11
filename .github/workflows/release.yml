@@ -48,8 +48,11 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
+      - name: Install Chromium for browser acceptance tests
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium
+
       - name: Run Node tests
-        run: node --test web/tests/*.test.mjs
+        run: BROWSER_BIN=/usr/bin/chromium node --test web/tests/*.test.mjs
 
       - name: Install release toolchain
         run: |
