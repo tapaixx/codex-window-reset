@@ -105,3 +105,30 @@ The final `git ls-files -- .superpowers/**` inspection still shows the two
 pre-existing tracked Task 5 and Task 6 reports; they are outside this task's
 requested cleanup and were not modified. The Task 8 report is absent from the
 index while its local file remains present.
+
+## 2026-09-11：模拟器与页面版本纠正（未发布）
+
+### 已确认的原因
+
+- `v0.0.8..v0.0.9` 只修改了空账户集合的配置校验及测试，没有包含模拟器 UI 改动。
+- 下载的 v0.0.9 Linux amd64 发布库仍包含写死的 `v0.0.8` 页面徽标；这不是缓存推测。
+- 旧渲染器把同一组顶层时间分段用于 A/B 两条轨道，且把起止相同的预热点拉长到午夜。
+- 原浏览器样例使用空时间轴，未验证策略差异，也未从 Go 嵌入页面验证版本和静态资源打包。
+
+### 本次实现与回归门禁
+
+- 参考 `codex-health-monitor` 的参数侧栏、四项指标、策略卡、预热概览和时间轴布局；保留本项目服务端调度与模拟算法，不声称算法等同参考项目。
+- Go 从与覆盖指标相同的区间生成独立 A/B 分段；预热点与持续时间区间分开渲染。
+- 页面版本读取构建时的 `pluginVersion`；新增样式和模块继续内联，仅注册 `/panel` 资源。
+- `TestEmbeddedPanelShowsTheBuildVersion` 检查嵌入页面的构建版本；`TestSimulationExposesDistinctStrategyCoverageForTheTimeline` 检查服务端 JSON 分段及覆盖分钟数。
+- `scripts/verify-panel.sh` 导出真实 Go 嵌入页面和模拟响应，再运行浏览器测试；CI 和 Release 的所有浏览器检查入口均调用该脚本。
+- 浏览器验证非空 A/B 时间轴、点标记、图例、键盘详情、明暗主题、375/1440px 模拟器、空账户配置保存及没有二次静态资源请求。完整布局测试另覆盖 375/768/1024/1440px。
+
+### 本地验证及边界
+
+- Go 1.24 Docker：`go vet ./...`、`go test -count=1 ./...`、`go test -count=1 -race ./...` 全部通过。
+- 实际嵌入页面及 Go 模拟响应：`node --test --test-isolation=none web/tests/*.test.mjs`，51 项通过，0 失败，0 跳过。
+- `npm run check`、`bash -n scripts/verify-panel.sh`、`actionlint` 和 `git diff --check` 通过。
+- 本机仅构建验证了 Linux arm64 共享库，使用测试版本 `0.0.9-validation`；该版本不是 Release，未验证真实宿主部署，也没有进行真实账户的额度消费操作。
+- 已检查桌面明暗主题及移动端截图。暗色新增样式仅作用于模拟器，不代表整页暗色主题已重做。
+- 本次没有提交、推送、打标签、发版或更新插件商店；已安装的 v0.0.9 不会因这些本地修改而改变。

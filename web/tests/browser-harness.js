@@ -10,6 +10,7 @@
   try {
     const mode = new URL(location.href).searchParams.get('browser_test');
     if (mode === 'reset') await checkResetConfirmation(result);
+    else if (mode?.startsWith('simulator')) await checkSimulator(result);
     else if (mode === 'contracts') await checkScheduleAndProbeContracts(result);
     else await checkResponsiveLayout(result);
     result.ok = true;
@@ -18,6 +19,42 @@
   }
   output.textContent = JSON.stringify(result);
 })();
+
+async function checkSimulator(result) {
+  await waitForPanel();
+  await waitFor(() => document.querySelector('.timeline-lane'), 'simulator did not render');
+  const [a, b] = document.querySelectorAll('.timeline-lane');
+  result.trackA = a.innerHTML;
+  result.trackB = b.innerHTML;
+  if (result.trackA === result.trackB) throw new Error('A/B time axes incorrectly display identical segments');
+  result.availableA = a.querySelectorAll('[data-kind="available"]').length;
+  result.availableB = b.querySelectorAll('[data-kind="available"]').length;
+  const markers = [...b.querySelectorAll('[data-preheat-marker]')];
+  result.markers = markers.length;
+  if (markers.some((node) => node.getBoundingClientRect().width > 30)) throw new Error('point marker expanded into a duration band');
+  result.hasLegend = ['预计可用', '预计受限', '午休', '预热'].every((label) => document.querySelector('.timeline-legend')?.textContent.includes(label));
+  result.readable = parseFloat(getComputedStyle(document.querySelector('.timeline-ruler span')).fontSize) >= 12;
+  result.pageOverflow = document.documentElement.scrollWidth > innerWidth;
+  result.pageVersion = document.querySelector('.version').textContent;
+  result.theme = document.documentElement.dataset.theme;
+  result.assumptions = document.querySelector('.simulation-assumptions').textContent;
+  result.assetRequests = (await fixtureState()).assetRequests;
+  const focusPoint = document.querySelector('[data-preheat-marker]');
+  focusPoint?.focus();
+  if (focusPoint && getComputedStyle(focusPoint.querySelector('.preheat-tooltip')).display === 'none') throw new Error(`preheat detail is unavailable to keyboard focus: ${JSON.stringify({ active: document.activeElement?.outerHTML, connected: focusPoint.isConnected, focused: focusPoint.matches(':focus'), disabled: focusPoint.disabled })}`);
+  focusPoint?.blur();
+  const before = (await fixtureState()).scheduleRequests.length;
+  document.querySelector('#schedule-enabled').checked = true;
+  document.querySelector('[name="preheat_lead_minutes"]').value = '120';
+  document.querySelector('[name="preheat_span_minutes"]').value = '60';
+  document.querySelector('#schedule-form button[type="submit"]').click();
+  const saved = await waitFor(async () => {
+    const state = await fixtureState();
+    return state.scheduleRequests.length > before ? state : null;
+  }, 'empty account schedule could not be saved');
+  result.emptySchedule = saved.scheduleRequests.at(-1);
+  document.querySelector('.strategy-grid').scrollIntoView({ block: 'start' });
+}
 
 async function waitFor(predicate, message, timeout = 5000) {
   const deadline = performance.now() + timeout;

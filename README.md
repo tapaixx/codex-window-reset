@@ -1,6 +1,6 @@
 # Codex Window Reset
 
-> CLIProxyAPI 原生插件 · Linux `amd64` / `arm64` · 当前版本 **v0.0.9**
+> CLIProxyAPI 原生插件 · Linux `amd64` / `arm64` · 当前版本 **v0.0.10**
 
 [下载 Release](https://github.com/tapaixx/codex-window-reset/releases) ·
 [插件商店](https://github.com/tapaixx/CLIProxyAPI-Plugins-Store) ·

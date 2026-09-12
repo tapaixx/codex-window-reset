@@ -7,11 +7,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { simulationFixture } from './simulation-fixture.mjs';
+
+const browserSimulation = process.env.BROWSER_SIMULATION_FILE
+  ? JSON.parse(await readFile(process.env.BROWSER_SIMULATION_FILE, 'utf8')) : simulationFixture;
 
 const testsDirectory = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(testsDirectory, '..');
 const repositoryRoot = resolve(webRoot, '..');
-const panelSource = await readFile(join(webRoot, 'panel.html'), 'utf8');
+const panelSource = await readFile(process.env.BROWSER_PANEL_FILE || join(webRoot, 'panel.html'), 'utf8');
 const harnessSource = await readFile(join(testsDirectory, 'browser-harness.js'), 'utf8');
 
 const browserCandidates = [
@@ -127,6 +131,30 @@ test('headless browser keeps scheduled membership separate and requires probe co
   }
 });
 
+test('simulator renders different A/B coverage with point markers and readable reference layout', { skip: browserSkip }, async () => {
+  const fixture = await startFixtureServer();
+  try {
+    for (const [width, mode] of [[375, 'simulator'], [1440, 'simulator'], [1440, 'simulator-dark']]) {
+      const result = await runBrowser(fixture.port, width, 1000, mode);
+      assert.equal(result.ok, true, result.error);
+      assert.notEqual(result.trackA, result.trackB, 'A/B tracks must not reuse the same segments');
+      assert.equal(result.availableA, 2);
+      assert.equal(result.availableB, 2);
+      assert.equal(result.markers, 2);
+      assert.equal(result.hasLegend, true);
+      assert.equal(result.readable, true);
+      assert.equal(result.pageOverflow, false);
+      assert.equal(result.pageVersion, process.env.BROWSER_EXPECTED_VERSION || 'v0.0.0-test');
+      assert.equal(result.theme, mode.endsWith('-dark') ? 'dark' : 'light');
+      assert.match(result.assumptions, /单窗口预计可用 60 分钟/);
+      if (process.env.BROWSER_PANEL_FILE) assert.deepEqual(result.assetRequests, [], 'embedded panel requested secondary resources');
+      assert.deepEqual(result.emptySchedule.scheduled_account_keys, []);
+    }
+  } finally {
+    await fixture.close();
+  }
+});
+
 async function findExecutable(explicit, candidates) {
   for (const candidate of [explicit, ...candidates]) {
     if (!candidate) continue;
@@ -165,7 +193,7 @@ async function requestBody(request) {
 }
 
 async function startFixtureServer() {
-  const state = { resetRequests: [], quotaRefreshRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [] };
+  const state = { resetRequests: [], quotaRefreshRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [], assetRequests: [] };
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -180,11 +208,13 @@ async function startFixtureServer() {
       }
       if (url.pathname === '/v0/resource/plugins/browser-test/panel') {
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        response.end(panelSource.replace('</body>', '<script src="/__browser-harness.js"></script></body>'));
+        const theme = url.searchParams.get('browser_test')?.endsWith('-dark') ? 'dark' : 'light';
+        response.end(panelSource.replace('data-theme="light"', `data-theme="${theme}"`).replace('{{PLUGIN_VERSION}}', 'v0.0.0-test').replace('</body>', '<script src="/__browser-harness.js"></script></body>'));
         return;
       }
       if (url.pathname.startsWith('/v0/resource/plugins/browser-test/')) {
         const relative = url.pathname.slice('/v0/resource/plugins/browser-test/'.length);
+        state.assetRequests.push(relative);
         const filePath = resolve(webRoot, relative);
         if (!filePath.startsWith(`${webRoot}/`) || filePath === webRoot) {
           response.writeHead(404);
@@ -295,7 +325,7 @@ async function serveManagementFixture(request, response, path, state) {
   }
   if (request.method === 'POST' && path.endsWith('/simulate')) {
     state.simulationRequests.push(await requestBody(request));
-    jsonResponse(response, 200, { ok: true, result: { work_minutes: 450, baseline: { available_coverage_minutes: 120, idle_window_minutes: 0 }, scheduled: { available_coverage_minutes: 180, idle_window_minutes: 15 }, net_gain_minutes: 60, preheat_windows: [], timeline_segments: [], assumptions: { productivity_minutes: 60 } } });
+    jsonResponse(response, 200, { ok: true, result: browserSimulation });
     return;
   }
   if (request.method === 'POST' && path.endsWith('/probes')) {
@@ -364,6 +394,9 @@ async function runBrowser(port, width, height, mode) {
     const { webSocketDebuggerUrl } = await waitForDevTools(debugPort, browser);
     const cdp = await connectDevTools(webSocketDebuggerUrl);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    // Headless pages can retain activeElement while suppressing CSS :focus.
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    if (mode.endsWith('-dark')) await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
     await cdp.send('Page.navigate', { url: page });

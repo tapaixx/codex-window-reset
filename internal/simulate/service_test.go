@@ -1,6 +1,7 @@
 package simulate
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -8,6 +9,60 @@ import (
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 	"github.com/tapaixx/codex-window-reset/internal/schedule"
 )
+
+func TestSimulationExposesDistinctStrategyCoverageForTheTimeline(t *testing.T) {
+	cfg := task4SimulationConfig(t)
+	cfg.ScheduledAccountKeys = []string{"acct-a"}
+	result, err := (Service{}).Run(cfg, time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Baseline struct {
+			Timeline []domain.TimelineSegment `json:"timeline_segments"`
+		} `json:"baseline"`
+		Scheduled struct {
+			Timeline []domain.TimelineSegment `json:"timeline_segments"`
+		} `json:"scheduled"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		segments []domain.TimelineSegment
+		starts   []string
+	}{
+		{"A", wire.Baseline.Timeline, []string{"09:00", "13:30"}},
+		{"B", wire.Scheduled.Timeline, []string{"09:00", "14:00"}},
+	} {
+		var starts []string
+		available, limited, lunch := 0, 0, 0
+		location, _ := time.LoadLocation("Asia/Shanghai")
+		for _, segment := range tc.segments {
+			minutes := int(segment.End.Sub(segment.Start) / time.Minute)
+			if minutes <= 0 {
+				t.Fatalf("%s has non-positive segment: %#v", tc.name, segment)
+			}
+			switch segment.Kind {
+			case "available":
+				starts = append(starts, segment.Start.In(location).Format("15:04"))
+				available += minutes
+			case "limited":
+				limited += minutes
+			case "break":
+				lunch += minutes
+			}
+		}
+		if !reflect.DeepEqual(starts, tc.starts) || available != 120 || limited != 390 || lunch != 90 {
+			t.Fatalf("%s timeline: starts=%v available=%d limited=%d lunch=%d", tc.name, starts, available, limited, lunch)
+		}
+	}
+}
 
 func task4SimulationConfig(t *testing.T) domain.Config {
 	t.Helper()

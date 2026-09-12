@@ -33,8 +33,9 @@ func (s *TimelineSegment) UnmarshalJSON(data []byte) error {
 }
 
 type StrategyMetrics struct {
-	AvailableCoverageMinutes int `json:"available_coverage_minutes"`
-	IdleWindowMinutes        int `json:"idle_window_minutes"`
+	AvailableCoverageMinutes int               `json:"available_coverage_minutes"`
+	IdleWindowMinutes        int               `json:"idle_window_minutes"`
+	TimelineSegments         []TimelineSegment `json:"timeline_segments"`
 }
 
 type SimulationResult struct {

@@ -4,6 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
   <meta name="resource-base-path" content=""><meta name="resource_base_path" content="">
   <title>Codex Window Reset</title><link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./simulator.css">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true">
@@ -16,7 +17,7 @@
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5"/></symbol>
   </svg>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark"><svg><use href="#i-wave"/></svg></span><div><div class="brand-title"><h1>Codex Window Reset</h1><span class="version">v0.0.8</span></div><p>配置维护 · 监控 Codex 服务健康状态，智能管理请求窗口与预热策略</p></div></div>
+    <div class="brand"><span class="brand-mark"><svg><use href="#i-wave"/></svg></span><div><div class="brand-title"><h1>Codex Window Reset</h1><span class="version">{{PLUGIN_VERSION}}</span></div><p>配置维护 · 监控 Codex 服务健康状态，智能管理请求窗口与预热策略</p></div></div>
     <nav class="top-actions" aria-label="页面操作"><button class="quiet-button" type="button" data-action="show-help"><svg><use href="#i-help"/></svg>使用说明</button><button class="quiet-button" type="button" data-action="focus-settings"><svg><use href="#i-settings"/></svg>设置</button><button class="primary-button" type="button" data-action="refresh-panel"><svg><use href="#i-refresh"/></svg>刷新</button></nav>
   </header>
   <main class="dashboard" id="main-content">
@@ -27,12 +28,14 @@
       <p class="inline-feedback" id="account-feedback" role="alert" aria-live="polite"></p>
       <div class="table-wrap"><table class="account-table"><thead><tr><th><input id="select-all-checkbox" type="checkbox" aria-label="选择全部账号执行手动操作"></th><th>账号</th><th>自动预热</th><th>AUTH INDEX</th><th>账号前缀</th><th>套餐类型</th><th>状态</th><th>短窗口</th><th>长窗口</th><th>重置额度</th><th>请求结果</th><th>窗口结果</th><th>HTTP / 耗时</th><th>快照时间</th><th>错误原因</th><th>操作</th></tr></thead><tbody id="accounts-table"></tbody></table></div>
     </section>
-    <div class="strategy-grid">
-      <section class="panel config-panel" id="settings" aria-labelledby="config-title">
-        <div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-green"><svg><use href="#i-settings"/></svg></span><div><h2 id="config-title">自动检测</h2><p>工作日和窗口维护策略</p></div></div><label class="switch"><input id="schedule-enabled" type="checkbox"><span></span><em>启用</em></label></div>
+    <section class="panel simulation-workspace" aria-labelledby="simulator-title">
+      <div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-violet"><svg><use href="#i-wave"/></svg></span><div><h2 id="simulator-title">窗口限额 · 预热对比模拟器</h2><p>参数维护与策略对比 · 仅模拟，不产生真实请求</p></div></div><span class="simulation-tag">服务端计算</span></div>
+      <div class="strategy-grid">
+      <section class="config-panel" id="settings" aria-labelledby="config-title">
+        <div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-green"><svg><use href="#i-settings"/></svg></span><div><h3 id="config-title">参数维护</h3><p>自动检测 · 账户集合可为空</p></div></div><label class="switch"><input id="schedule-enabled" type="checkbox"><span></span><em>启用</em></label></div>
         <form id="schedule-form" class="config-form" novalidate>
           <label><span>时区</span><input name="timezone" value="Asia/Shanghai" required></label><label><span>窗口周期（小时）</span><input name="window_hours" type="number" min="1" max="24" value="5"></label><label><span>单窗口预计可用时长（分钟）</span><input name="productivity_minutes" type="number" min="1" value="60"></label>
-          <fieldset class="period-field fixed-window-fields"><legend>工作窗口（固定参数）</legend><p>沿用 Codex Health Monitor 的固定工作时间；午休时段不会执行自动预热。</p><div class="fixed-window-grid"><label><span>工作开始</span><input name="work_start" id="work-start" type="time" value="09:00" required></label><label><span>午休开始</span><input name="lunch_start" id="lunch-start" type="time" value="12:00" required></label><label><span>午休结束</span><input name="lunch_end" id="lunch-end" type="time" value="13:30" required></label><label><span>工作结束</span><input name="work_end" id="work-end" type="time" value="19:00" required></label></div></fieldset>
+          <fieldset class="period-field fixed-window-fields"><legend>工作窗口（固定参数）</legend><p>工作与午休分开维护；实际预热时间见右侧模拟结果。</p><div class="fixed-window-grid"><label><span>工作开始</span><input name="work_start" id="work-start" type="time" value="09:00" required></label><label><span>午休开始</span><input name="lunch_start" id="lunch-start" type="time" value="12:00" required></label><label><span>午休结束</span><input name="lunch_end" id="lunch-end" type="time" value="13:30" required></label><label><span>工作结束</span><input name="work_end" id="work-end" type="time" value="19:00" required></label></div></fieldset>
           <div id="work-periods" hidden aria-hidden="true"></div><div id="blackout-periods" hidden aria-hidden="true"></div>
           <label><span>最小健康阈值（%）</span><input name="health_threshold_percent" type="number" min="0" max="100" value="80"></label><label><span>预热提前（分钟）</span><input name="preheat_lead_minutes" type="number" min="1" value="120"></label><label><span>预热时长（分钟）</span><input name="preheat_span_minutes" type="number" min="1" value="60"></label>
           <fieldset class="weekday-field"><legend>工作日</legend><div id="weekdays"></div></fieldset><fieldset class="skip-field"><legend>跳过窗口</legend><div id="skip-window-chips"></div><div class="inline-add"><input id="skip-window-input" type="time"><button class="secondary-button" data-action="add-skip-window" type="button">添加</button></div></fieldset>
@@ -40,8 +43,9 @@
           <p class="inline-feedback" id="schedule-feedback" role="alert" aria-live="polite"></p><div class="form-actions"><span>配置版本 <b id="schedule-revision">--</b></span><button class="secondary-button" type="button" data-action="restore-schedule">恢复修改</button><button class="primary-button" type="submit">保存配置</button></div>
         </form>
       </section>
-      <section class="panel simulator-panel" aria-labelledby="simulator-title"><div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-violet"><svg><use href="#i-wave"/></svg></span><div><h2 id="simulator-title">窗口限额 · 预热对比模拟器</h2><p>基于当前配置即时计算，不产生真实请求</p></div></div></div><div id="simulation-output" class="simulation-output"></div></section>
-    </div>
+      <section class="simulator-panel" aria-label="模拟结果"><div id="simulation-output" class="simulation-output" aria-live="polite"></div></section>
+      </div>
+    </section>
     <section class="panel history-panel" aria-labelledby="history-title"><div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-orange"><svg><use href="#i-refresh"/></svg></span><div><h2 id="history-title">检测历史</h2><p>最近 100 次账号操作，请求结果与窗口结果分开显示</p></div></div><button class="secondary-button" type="button" data-action="load-records"><svg><use href="#i-refresh"/></svg>刷新历史</button></div><div class="table-wrap"><table class="history-table"><thead><tr><th>时间</th><th>触发方式</th><th>账号</th><th>请求结果</th><th>窗口结果</th><th>HTTP</th><th>耗时</th><th>错误</th></tr></thead><tbody id="history-output"></tbody></table></div></section>
     <section class="panel audit-panel" aria-labelledby="audit-title"><div class="panel-heading compact"><div class="heading-title"><span class="section-icon section-icon-orange"><svg><use href="#i-trash"/></svg></span><div><h2 id="audit-title">Reset Audit</h2><p>重置额度的持久审计记录，与普通检测历史独立</p></div></div><div class="toolbar-group"><button class="secondary-button" type="button" data-action="load-audit">刷新审计</button><button class="danger-link" type="button" data-action="clear-audit">清除审计</button></div></div><div class="table-wrap"><table class="history-table"><thead><tr><th>请求时间</th><th>账号</th><th>重置前额度</th><th>结果</th><th>HTTP 分类</th><th>关联 ID</th></tr></thead><tbody id="reset-audit-output"></tbody></table></div></section>
     <p class="feedback" id="feedback" role="status" aria-live="polite"></p>

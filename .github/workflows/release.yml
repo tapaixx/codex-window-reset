@@ -56,7 +56,7 @@ jobs:
           go vet ./...
           go test -count=1 ./...
           go test -count=1 -race ./...
-          BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" node --test web/tests/*.test.mjs
+          BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" bash scripts/verify-panel.sh
 
       - name: Build native shared library
         run: CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -buildmode=c-shared -o "/tmp/codex-window-reset-${{ matrix.architecture }}.so" .
@@ -114,7 +114,7 @@ jobs:
           done
 
       - name: Run Node tests
-        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" node --test web/tests/*.test.mjs
+        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" bash scripts/verify-panel.sh
 
       - name: Install release toolchain
         run: |

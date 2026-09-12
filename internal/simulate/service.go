@@ -92,16 +92,51 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 		Baseline: domain.StrategyMetrics{
 			AvailableCoverageMinutes: wholeMinutes(baselineCoverage),
 			IdleWindowMinutes:        wholeMinutes(baselineIdle),
+			TimelineSegments:         strategyTimeline(dayStart, dayEnd, work, baselineWindows),
 		},
 		Scheduled: domain.StrategyMetrics{
 			AvailableCoverageMinutes: wholeMinutes(scheduledCoverage),
 			IdleWindowMinutes:        wholeMinutes(scheduledIdle),
+			TimelineSegments:         strategyTimeline(dayStart, dayEnd, work, scheduledWindows),
 		},
 		NetGainMinutes:   wholeMinutes(scheduledCoverage) - wholeMinutes(baselineCoverage),
 		PreheatWindows:   occurrences,
 		TimelineSegments: timelineSegments(dayStart, dayEnd, work, occurrences),
 		Assumptions:      map[string]int{"productivity_minutes": cfg.ProductivityMinutes},
 	}, nil
+}
+
+// The chart and metrics consume the same intervals. The browser only lays out
+// these segments; it must not invent coverage or reuse A's segments for B.
+func strategyTimeline(dayStart, dayEnd time.Time, work, available []timeInterval) []domain.TimelineSegment {
+	boundaries := []time.Time{dayStart, dayEnd}
+	for _, intervals := range [][]timeInterval{work, available} {
+		for _, interval := range intervals {
+			boundaries = append(boundaries, interval.start, interval.end)
+		}
+	}
+	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
+	boundaries = uniqueTimes(boundaries)
+	segments := make([]domain.TimelineSegment, 0, len(boundaries))
+	for i := 0; i+1 < len(boundaries); i++ {
+		start, end := boundaries[i], boundaries[i+1]
+		midpoint := start.Add(end.Sub(start) / 2)
+		kind := "idle"
+		if containsInstant(work, midpoint) {
+			kind = "limited"
+			if containsInstant(available, midpoint) {
+				kind = "available"
+			}
+		} else if len(work) > 0 && midpoint.After(work[0].start) && midpoint.Before(work[len(work)-1].end) {
+			kind = "break"
+		}
+		if len(segments) > 0 && segments[len(segments)-1].Kind == kind {
+			segments[len(segments)-1].End = end
+		} else {
+			segments = append(segments, domain.TimelineSegment{Kind: kind, Start: start, End: end})
+		}
+	}
+	return segments
 }
 
 func maxInt(value *int, fallback int) int {

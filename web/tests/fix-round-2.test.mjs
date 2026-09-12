@@ -13,7 +13,6 @@ test('panel defaults to masked identities and delegates simulation to the server
   const source = await readFile(new URL('../modules/main.js', import.meta.url), 'utf8');
   assert.match(source, /hidden:\s*true/u);
   assert.match(source, /request\(['"]\/simulate['"]/u);
-  assert.match(source, /result\.assumptions/u);
   assert.doesNotMatch(source, /buildWindowStrategy\(/u);
 });
 

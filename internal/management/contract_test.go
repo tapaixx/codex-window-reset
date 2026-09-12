@@ -334,7 +334,7 @@ func TestManagementResourcesServeEveryRegisteredAsset(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(panel)
-	if strings.Contains(text, `src="./modules/`) || strings.Contains(text, `href="./styles.css"`) {
+	if strings.Contains(text, `src="./modules/`) || strings.Contains(text, `href="./styles.css"`) || strings.Contains(text, `href="./simulator.css"`) {
 		t.Fatal("panel still references secondary plugin resources")
 	}
 	if strings.Contains(text, `type="module"`) || strings.Contains(text, "import {") || strings.Contains(text, "export function") {
