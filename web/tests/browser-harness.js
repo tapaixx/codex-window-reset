@@ -100,11 +100,15 @@ async function checkUIAudit(mode) {
     const start = $('.timeline-lane [data-kind="available"]').getBoundingClientRect().left;
     const marker = $('.work-boundary').getBoundingClientRect().left;
     assert(Math.abs(start - marker) < 2, `work boundary misaligned by ${start - marker}px`);
-    assert($('.sim-metrics').textContent.includes('当前参数下无额外收益') && !$('.sim-metric.gain'), 'zero gain is still presented as a positive benefit');
+    assert($('.sim-metric.gain strong')?.textContent === '+1小时', 'preheat renewal benefit is missing from metrics');
     assert($('.strategy-a').textContent.includes('上班后第一次使用才开启窗口') && $('.strategy-b').textContent.includes('上班前先使用自动预热'), 'A/B explanations are unclear');
     set('work_start', '02:15');
     await waitFor(() => $('.timeline-ruler span')?.textContent === '01:00', 'axis did not follow edited work time');
     assert([...document.querySelectorAll('.timeline-ruler span')].at(-1).textContent === '20:00', 'odd-hour domain lost its final tick');
+  } else if (mode === 'audit-zero-gain') {
+    await configure({ zeroGain: true }); set('window_hours', '24');
+    await waitFor(() => $('.sim-metrics')?.textContent.includes('当前参数下无额外收益'), 'zero gain not explained');
+    assert(!$('.sim-metric.gain'), 'zero gain presented as positive');
   } else if (mode === 'audit-accessibility') {
     assert($('[data-account-selection]').getBoundingClientRect().width > 0, 'mobile individual account checkbox is hidden');
     const skip = $('#skip-window-input');
@@ -145,6 +149,10 @@ async function checkSimulator(result) {
   if (result.trackA === result.trackB) throw new Error('A/B time axes incorrectly display identical segments');
   result.availableA = a.querySelectorAll('[data-kind="available"]').length;
   result.availableB = b.querySelectorAll('[data-kind="available"]').length;
+  const ranges = (lane) => [...lane.querySelectorAll('[data-kind="available"]')].map((band) => band.title.replace('预计可用 ', ''));
+  if (JSON.stringify(ranges(a)) !== JSON.stringify(['09:00–10:00', '14:00–15:00'])) throw new Error(`A incorrectly renews at lunch: ${ranges(a)}`);
+  if (JSON.stringify(ranges(b)) !== JSON.stringify(['09:00–10:00', '11:30–12:00', '13:30–14:00', '16:30–17:30'])) throw new Error(`B is still limited after preheat-window renewal: ${ranges(b)}`);
+  if (document.querySelector('.sim-metric.gain strong')?.textContent !== '+1小时') throw new Error('metric does not match the 60-minute timeline gain');
   const markers = [...b.querySelectorAll('[data-preheat-marker]')];
   result.markers = markers.length;
   if (markers.some((node) => node.getBoundingClientRect().width > 30)) throw new Error('point marker expanded into a duration band');
@@ -154,6 +162,7 @@ async function checkSimulator(result) {
   result.pageVersion = document.querySelector('.version').textContent;
   result.theme = document.documentElement.dataset.theme;
   result.assumptions = document.querySelector('.simulation-assumptions').textContent;
+  if (!result.assumptions.includes('单账户示例') || !result.assumptions.includes('午休不消耗')) throw new Error('simulation does not disclose its account and budget assumptions');
   result.assetRequests = (await fixtureState()).assetRequests;
   const beforeRefreshAll = await fixtureState();
   document.querySelector('[data-action="refresh-all-quota"]').click();

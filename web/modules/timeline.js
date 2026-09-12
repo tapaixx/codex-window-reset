@@ -244,5 +244,5 @@ export function renderSimulationComparison(root, result, config) {
     root.append(simElement('p', '服务端未返回策略分段，请确认插件已更新。', 'simulation-empty'));
   }
   const scope = config.scheduled_account_keys?.length ? `已配置 ${config.scheduled_account_keys.length} 个自动预热账户。` : '账户集合为空：仅展示示例计划，不触发自动请求。';
-  root.append(simElement('p', `${scope} 单窗口预计可用 ${Number(result.assumptions?.productivity_minutes) || 0} 分钟；模拟不发送真实请求，也不读取当前配额。`, 'simulation-assumptions'));
+  root.append(simElement('p', `${scope} 单账户示例：策略 B 按最早有效预热起点推演；无提前预热则与 A 相同，多账户额度不叠加。单窗口预计可用 ${Number(result.assumptions?.productivity_minutes) || 0} 分钟，仅在工作时段消耗，午休不消耗；按窗口周期恢复，后续预热请求不视为强制重置。模拟不发送真实请求，也不读取当前配额。`, 'simulation-assumptions'));
 }

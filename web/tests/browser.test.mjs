@@ -139,7 +139,7 @@ test('simulator renders different A/B coverage with point markers and readable r
       assert.equal(result.ok, true, result.error);
       assert.notEqual(result.trackA, result.trackB, 'A/B tracks must not reuse the same segments');
       assert.equal(result.availableA, 2);
-      assert.equal(result.availableB, 2);
+      assert.equal(result.availableB, 4);
       assert.equal(result.markers, 2);
       assert.equal(result.hasLegend, true);
       assert.equal(result.readable, true);
@@ -158,7 +158,7 @@ test('simulator renders different A/B coverage with point markers and readable r
 for (const [mode, width] of [
   ['audit-refresh', 1440], ['audit-refresh-empty', 1440], ['audit-refresh-failure', 1440],
   ['audit-draft', 1440], ['audit-validation', 1440], ['audit-axis', 1440],
-  ['audit-accessibility', 375], ['audit-theme-dark', 1440], ['audit-navigation', 1440],
+  ['audit-accessibility', 375], ['audit-theme-dark', 1440], ['audit-navigation', 1440], ['audit-zero-gain', 1440],
 ]) {
   test(`ui audit regression: ${mode}`, { skip: browserSkip }, async () => {
     const fixture = await startFixtureServer();
@@ -344,7 +344,7 @@ async function serveManagementFixture(request, response, path, state) {
   }
   if (request.method === 'POST' && path.endsWith('/simulate')) {
     state.simulationRequests.push(await requestBody(request));
-    jsonResponse(response, 200, { ok: true, result: browserSimulation });
+    jsonResponse(response, 200, { ok: true, result: state.controls?.zeroGain ? { ...browserSimulation, scheduled: browserSimulation.baseline, net_gain_minutes: 0 } : browserSimulation });
     return;
   }
   if (request.method === 'POST' && path.endsWith('/probes')) {
