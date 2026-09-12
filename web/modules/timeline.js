@@ -29,14 +29,41 @@ function simClock(value, timezone) {
   };
 }
 
-export function simulationRange(start, end, timezone) {
+export function simulationRange(start, end, timezone, domain = { start: 0, end: 1440 }) {
   if (!start || !end || Date.parse(end) <= Date.parse(start)) return null;
   const from = simClock(start, timezone), to = simClock(end, timezone);
   if (!from || !to) return null;
   const last = to.date > from.date ? 1440 : to.minute;
   if (last <= from.minute) return null;
-  return { left: from.minute / 14.4, width: (last - from.minute) / 14.4, label: `${from.label}–${last === 1440 ? '24:00' : to.label}` };
+  const firstVisible = Math.max(from.minute, domain.start), lastVisible = Math.min(last, domain.end);
+  if (lastVisible <= firstVisible) return null;
+  return { left: (firstVisible - domain.start) / (domain.end - domain.start) * 100, width: (lastVisible - firstVisible) / (domain.end - domain.start) * 100, label: `${from.label}–${last === 1440 ? '24:00' : to.label}` };
 }
+
+export function simulationDomain(result = {}, config = {}) {
+  const timezone = config.timezone || 'Asia/Shanghai';
+  const minutes = [];
+  for (const period of config.work_periods || []) {
+    for (const clock of [period.start, period.end]) {
+      if (!/^\d{2}:\d{2}$/.test(clock || '')) continue;
+      const [hour, minute] = clock.split(':').map(Number);
+      if (hour < 24 && minute < 60) minutes.push(hour * 60 + minute);
+    }
+  }
+  const intervals = [...(result.baseline?.timeline_segments || []), ...(result.scheduled?.timeline_segments || [])].filter((segment) => segment.kind !== 'idle');
+  for (const window of result.preheat_windows || []) {
+    if (!window.missed) intervals.push({ start: window.window_start, end: window.window_end });
+  }
+  for (const interval of intervals) {
+    const range = simulationRange(interval.start, interval.end, timezone);
+    if (range) minutes.push(Math.round(range.left * 14.4), Math.round((range.left + range.width) * 14.4));
+  }
+  if (!minutes.length) return { start: 0, end: 1440 };
+  return { start: Math.max(0, Math.floor(Math.min(...minutes) / 60) * 60 - 60), end: Math.min(1440, Math.ceil(Math.max(...minutes) / 60) * 60 + 60) };
+}
+
+const axisPercent = (minute, domain) => (minute - domain.start) / (domain.end - domain.start) * 100;
+const axisClock = (minute) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 
 function simPosition(element, range) {
   element.style.setProperty('--start', `${range.left}%`);
@@ -85,10 +112,11 @@ function simPreheatGroups(occurrences, timezone) {
   });
 }
 
-function simTimeline(result, timezone, groups) {
+function simTimeline(result, timezone, groups, config = {}) {
+  const domain = simulationDomain(result, config);
   const card = simElement('section', '', 'timeline-block');
   const header = simElement('div', '', 'timeline-title');
-  header.append(simElement('h3', '工作日时间轴'), simElement('span', `${timezone} · 24 小时`));
+  header.append(simElement('h3', '工作日时间轴'), simElement('span', `${timezone} · ${axisClock(domain.start)}–${axisClock(domain.end)}`));
   const legend = simElement('div', '', 'timeline-legend');
   for (const [kind, name] of [['available', '预计可用'], ['limited', '预计受限'], ['break', '午休'], ['preheat', '预热时间点']]) {
     const item = simElement('span');
@@ -98,12 +126,28 @@ function simTimeline(result, timezone, groups) {
   const scroll = simElement('div', '', 'timeline-scroll');
   scroll.tabIndex = 0; scroll.setAttribute('role', 'region'); scroll.setAttribute('aria-label', 'A/B 时间轴，小屏可左右滚动');
   const chart = simElement('div', '', 'timeline-chart');
+  chart.style.setProperty('--grid-step', `${60 / (domain.end - domain.start) * 100}%`);
   const ruler = simElement('div', '', 'timeline-ruler');
-  for (let hour = 0; hour <= 24; hour += 2) {
-    const tick = simElement('span', `${String(hour).padStart(2, '0')}:00`);
-    tick.style.setProperty('--at', `${hour / 24 * 100}%`); ruler.append(tick);
+  const tickStep = domain.end - domain.start > 960 ? 120 : 60;
+  const tickMinutes = [];
+  for (let minute = domain.start; minute <= domain.end - tickStep; minute += tickStep) tickMinutes.push(minute);
+  tickMinutes.push(domain.end);
+  for (const minute of tickMinutes) {
+    const tick = simElement('span', axisClock(minute));
+    tick.style.setProperty('--at', `${axisPercent(minute, domain)}%`); ruler.append(tick);
   }
   chart.append(ruler);
+  const boundaries = simElement('div', '', 'work-boundaries'); boundaries.setAttribute('aria-hidden', 'true');
+  const period = (config.work_periods || [])[0] || {};
+  for (const [label, value] of [['上班', period.start], ['下班', (config.work_periods || []).at(-1)?.end]]) {
+    if (!value) continue;
+    const [hours, minutes] = String(value).split(':').map(Number);
+    const marker = simElement('span', label, 'work-boundary');
+    marker.style.setProperty('--at', `${axisPercent(hours * 60 + minutes, domain)}%`);
+    marker.title = `${label} ${value}`;
+    boundaries.append(marker);
+  }
+  chart.append(boundaries);
   for (const [letter, key, description] of [['A', 'baseline', '首次使用'], ['B', 'scheduled', '配置预热']]) {
     const row = simElement('div', '', `timeline-row strategy-${letter.toLowerCase()}`);
     const label = simElement('div', '', 'timeline-row-label');
@@ -112,7 +156,7 @@ function simTimeline(result, timezone, groups) {
     lane.setAttribute('aria-label', `策略 ${letter} 的工作覆盖与预热时间`);
     for (const segment of result[key].timeline_segments) {
       if (!simulationKinds[segment.kind] || segment.kind === 'idle') continue;
-      const range = simulationRange(segment.start, segment.end, timezone);
+      const range = simulationRange(segment.start, segment.end, timezone, domain);
       if (!range) continue;
       const band = simElement('span', '', `timeline-band ${segment.kind}-band`);
       band.dataset.kind = segment.kind;
@@ -123,13 +167,14 @@ function simTimeline(result, timezone, groups) {
       lane.append(band);
     }
     if (key === 'scheduled') groups.forEach((group, index) => {
-      const range = simulationRange(group.start, group.end, timezone);
+      const range = simulationRange(group.start, group.end, timezone, domain);
+      if (!range) return;
       const window = simElement('span', '', 'preheat-range');
       simPosition(window, range); window.title = `预热时段 ${index + 1} · ${range.label}`;
       lane.append(window);
       const point = simElement('button', '', 'preheat-point');
       point.type = 'button'; point.dataset.preheatMarker = String(index + 1);
-      point.style.setProperty('--at', `${group.first.minute / 14.4}%`);
+      point.style.setProperty('--at', `${axisPercent(group.first.minute, domain)}%`);
       const detail = `预热 ${index + 1}：允许时段 ${range.label}，计划执行 ${group.execution}`;
       point.setAttribute('aria-label', detail); point.title = detail;
       point.append(simElement('span', `${group.first.label}`, 'preheat-label'));
@@ -173,11 +218,11 @@ export function renderSimulationComparison(root, result, config) {
   metrics.append(simMetric('当天总工作时长', simDuration(work), '扣除午休 / 非工作间隔', 'work'),
     simMetric('策略 A 可用', simDuration(result.baseline?.available_coverage_minutes), '工作时段首次使用'),
     simMetric('策略 B 可用', simDuration(result.scheduled?.available_coverage_minutes), '按已配置的预热计划', 'scheduled'),
-    simMetric('预热后增益', `${gain < 0 ? '−' : '+'}${simDuration(Math.abs(gain))}`, '策略 B 与策略 A 的差值', gain < 0 ? 'loss' : 'gain'));
+    simMetric('预热后增益', `${gain === 0 ? '' : gain < 0 ? '−' : '+'}${simDuration(Math.abs(gain))}`, gain === 0 ? '当前参数下无额外收益' : '策略 B 与策略 A 的差值', gain === 0 ? 'neutral' : gain < 0 ? 'loss' : 'gain'));
   root.append(metrics);
   const comparison = simElement('div', '', 'strategy-compare');
-  comparison.append(simStrategyCard('A', '首次使用', result.baseline || {}, work, threshold),
-    simStrategyCard('B', '配置预热', result.scheduled || {}, work, threshold));
+  comparison.append(simStrategyCard('A', '上班后第一次使用才开启窗口', result.baseline || {}, work, threshold),
+    simStrategyCard('B', '上班前先使用自动预热', result.scheduled || {}, work, threshold));
   root.append(comparison);
   const groups = simPreheatGroups(result.preheat_windows, timezone);
   const overview = simElement('section', '', 'window-overview');
@@ -194,7 +239,7 @@ export function renderSimulationComparison(root, result, config) {
   if (!groups.length) strip.append(simElement('p', work ? '当前配置没有可执行的预热时段。' : '模拟日期不是工作日，当前没有工作覆盖或预热计划。', 'simulation-empty'));
   overview.append(title, strip); root.append(overview);
   if (Array.isArray(result.baseline?.timeline_segments) && Array.isArray(result.scheduled?.timeline_segments)) {
-    root.append(simTimeline(result, timezone, groups));
+    root.append(simTimeline(result, timezone, groups, config));
   } else {
     root.append(simElement('p', '服务端未返回策略分段，请确认插件已更新。', 'simulation-empty'));
   }

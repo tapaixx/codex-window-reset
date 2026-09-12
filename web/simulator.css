@@ -94,14 +94,16 @@
 .legend-preheat { border: 2px solid var(--sim-purple); border-radius: 50% !important; }
 .timeline-scroll { overflow-x: auto; margin-top: 16px; padding: 0 0 8px; scrollbar-width: thin; }
 .timeline-scroll:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
-.simulation-workspace .timeline-chart { min-width: 690px; padding: 0 8px 0 0; background: transparent; border: 0; }
+.simulation-workspace .timeline-chart { position: relative; min-width: 690px; padding: 0 8px 0 0; background: transparent; border: 0; }
 .simulation-workspace .timeline-ruler { height: 28px; margin-left: 86px; border: 0; }
 .simulation-workspace .timeline-ruler span { font-size: 12px; top: 0; }
+.simulation-workspace .work-boundaries { position: absolute; top: 28px; bottom: 0; left: 86px; right: 8px; pointer-events: none; z-index: 4; }
+.simulation-workspace .work-boundary { position: absolute; top: 0; bottom: 0; left: var(--at); border-left: 2px dashed var(--blue); color: var(--blue); font-size: 12px; font-weight: 700; padding-left: 4px; }
 .simulation-workspace .timeline-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; align-items: center; margin-top: 16px; }
 .simulation-workspace .timeline-row + .timeline-row { margin-top: 32px; }
 .timeline-row-label strong { display: block; font-size: 13px; }
 .timeline-row-label small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
-.simulation-workspace .timeline-lane { position: relative; height: 64px; background: repeating-linear-gradient(to right, transparent 0, transparent calc(8.3333% - 1px), var(--line) calc(8.3333% - 1px), var(--line) 8.3333%), var(--surface-2); border: 1px solid var(--line); border-radius: 5px; }
+.simulation-workspace .timeline-lane { position: relative; height: 64px; background: repeating-linear-gradient(to right, transparent 0, transparent calc(var(--grid-step) - 1px), var(--line) calc(var(--grid-step) - 1px), var(--line) var(--grid-step)), var(--surface-2); border: 1px solid var(--line); border-radius: 5px; }
 .simulation-workspace .timeline-band { position: absolute; top: 27px; left: var(--start); width: var(--width); height: 22px; border-radius: 3px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .simulation-workspace .timeline-band > span { font-size: 12px; white-space: nowrap; }
 .simulation-workspace .available-band { background: var(--sim-available); color: white; }
@@ -122,6 +124,11 @@
 .timeline-details td, .timeline-details th { font-size: 12px; background: transparent; color: var(--ink); border-color: var(--line); }
 .simulation-workspace .simulation-assumptions, .simulation-empty { display: block; margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--blue-soft); color: var(--muted); font-size: 12px; line-height: 1.7; }
 .simulation-empty { margin: 0; }
+.simulation-workspace .sim-metric.neutral { background: var(--surface-2); }
+.simulation-workspace .sim-metric.neutral strong { color: var(--muted); }
+.simulation-workspace .field-error { grid-column: 1/-1; }
+.simulation-workspace .skip-time-label { display: grid; gap: 4px; min-width: 0; }
+.simulation-workspace .skip-time-label > span { font-size: 12px; color: var(--muted); }
 html[data-theme="dark"] .simulation-workspace {
   --surface: #18212d; --surface-2: #121a25; --ink: #e6edf7; --muted: #b1bdce;
   --line: #324052; --line-strong: #506078; --blue-soft: #1e304b;
@@ -132,6 +139,8 @@ html[data-theme="dark"] .simulation-workspace {
 html[data-theme="dark"] .simulation-workspace .coverage-status.is-good { color: #75d9b3; }
 html[data-theme="dark"] .simulation-workspace .coverage-status.is-low { color: #ffa7af; }
 html[data-theme="dark"] .simulation-workspace .sim-metric.gain strong { color: #75d9b3; }
+html[data-theme="dark"] .simulation-workspace .work-boundary { color: #96bbff; border-color: #96bbff; }
+html[data-theme="dark"] .simulation-workspace .weekday-chip:has(input:checked) { color: #96bbff; }
 @media (max-width: 1100px) {
   .simulation-workspace .strategy-grid { grid-template-columns: 280px minmax(0, 1fr); gap: 14px; padding: 14px; }
   .simulation-workspace .sim-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -143,6 +152,10 @@ html[data-theme="dark"] .simulation-workspace .sim-metric.gain strong { color: #
   .simulation-workspace .strategy-compare { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .simulation-workspace .panel-heading { flex-direction: row; }
   .simulation-tag { display: none; }
+}
+@media (max-width: 767px) {
+  .toolbar > .toolbar-group:last-child { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .toolbar > .toolbar-group:last-child button { width: 100%; white-space: nowrap; }
 }
 @media (max-width: 480px) {
   .simulation-workspace .strategy-grid { padding: 10px; }

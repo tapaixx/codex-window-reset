@@ -155,6 +155,20 @@ test('simulator renders different A/B coverage with point markers and readable r
   }
 });
 
+for (const [mode, width] of [
+  ['audit-refresh', 1440], ['audit-refresh-empty', 1440], ['audit-refresh-failure', 1440],
+  ['audit-draft', 1440], ['audit-validation', 1440], ['audit-axis', 1440],
+  ['audit-accessibility', 375], ['audit-theme-dark', 1440], ['audit-navigation', 1440],
+]) {
+  test(`ui audit regression: ${mode}`, { skip: browserSkip }, async () => {
+    const fixture = await startFixtureServer();
+    try {
+      const result = await runBrowser(fixture.port, width, 1000, mode);
+      assert.equal(result.ok, true, result.error);
+    } finally { await fixture.close(); }
+  });
+}
+
 async function findExecutable(explicit, candidates) {
   for (const candidate of [explicit, ...candidates]) {
     if (!candidate) continue;
@@ -193,11 +207,12 @@ async function requestBody(request) {
 }
 
 async function startFixtureServer() {
-  const state = { resetRequests: [], quotaRefreshRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [], assetRequests: [] };
+  const state = { resetRequests: [], quotaRefreshRequests: [], authFilesRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [], assetRequests: [] };
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url || '/', 'http://127.0.0.1');
       if (url.pathname === '/__browser-state') {
+        if (request.method === 'POST') state.controls = { ...state.controls, ...await requestBody(request) };
         jsonResponse(response, 200, state);
         return;
       }
@@ -276,6 +291,9 @@ async function serveManagementFixture(request, response, path, state) {
     return;
   }
   if (request.method === 'GET' && path === '/v0/management/auth-files') {
+    state.authFilesRequests.push({ at: Date.now() });
+    if (state.controls?.authFailure) { jsonResponse(response, 503, { message: 'fixture discovery failed' }); return; }
+    if (state.controls?.files) { jsonResponse(response, 200, { files: state.controls.files }); return; }
     jsonResponse(response, 200, { files: [{ provider: 'codex', email: 'browser@example.com', auth_index: 'browser', account_id: 'acct_browser', plan: 'Pro', disabled: false, unavailable: false }] });
     return;
   }
@@ -308,6 +326,7 @@ async function serveManagementFixture(request, response, path, state) {
   }
   if (request.method === 'PUT' && path.endsWith('/schedule')) {
     const body = await requestBody(request); state.scheduleRequests.push(body);
+    if (state.controls?.saveDelay) await new Promise((resolve) => setTimeout(resolve, 200));
     jsonResponse(response, 200, { ok: true, result: { ...body, revision: 2 } });
     return;
   }
@@ -343,6 +362,9 @@ async function serveManagementFixture(request, response, path, state) {
         const body = await requestBody(request);
         state.quotaRefreshRequests.push(body);
         const isCredits = String(body?.url || '').includes('rate-limit-reset-credits');
+        if (!isCredits && state.controls?.failAuthIndexes?.includes(body.auth_index)) {
+          jsonResponse(response, 200, { status_code: 503, body: '{}' }); return;
+        }
         const result = isCredits ? { applicable_available_count: 2, available_count: 2, credits: [] } : { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: 1893456000 } } };
         jsonResponse(response, 200, { status_code: 200, body: JSON.stringify(result) });
         return;
@@ -397,6 +419,7 @@ async function runBrowser(port, width, height, mode) {
     // Headless pages can retain activeElement while suppressing CSS :focus.
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     if (mode.endsWith('-dark')) await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+    if (mode === 'audit-navigation') await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
     await cdp.send('Page.navigate', { url: page });

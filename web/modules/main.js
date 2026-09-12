@@ -10,6 +10,8 @@ export function syncHostTheme({ root = globalThis.document?.documentElement, par
   const apply = () => {
     const parentTheme = source?.getAttribute?.('data-theme') || (source?.classList?.contains?.('dark') ? 'dark' : '');
     root.setAttribute('data-theme', parentTheme === 'dark' || parentTheme === 'light' ? parentTheme : (media?.matches ? 'dark' : 'light'));
+    const themeColor = root.ownerDocument?.querySelector('meta[name="theme-color"]');
+    if (themeColor) themeColor.content = root.getAttribute('data-theme') === 'dark' ? '#101722' : '#f4f7fb';
   };
   apply();
   const Observer = windowRef?.MutationObserver || globalThis.MutationObserver;
@@ -88,7 +90,7 @@ function bootPanel() {
       const scheduled = document.createElement('label'); scheduled.className = 'switch row-switch'; const scheduledInput = document.createElement('input'); scheduledInput.type = 'checkbox'; scheduledInput.checked = state.scheduledKeys.has(model.key); scheduledInput.disabled = account.disabled; scheduledInput.dataset.accountScheduled = model.key; scheduledInput.setAttribute('aria-label', `自动预热 ${model.email}`); const scheduledTrack = document.createElement('span'); const scheduledLabel = document.createElement('em'); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; scheduledInput.addEventListener('change', () => { scheduledInput.checked ? state.scheduledKeys.add(model.key) : state.scheduledKeys.delete(model.key); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; queueSimulation(); }); scheduled.append(scheduledInput, scheduledTrack, scheduledLabel);
       const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status];
       const actions = document.createElement('div'); actions.className = 'row-actions';
-      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.addEventListener('click', () => refreshQuota([model.key], refresh));
+      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = account.disabled || Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh));
       const reset = document.createElement('button'); reset.className = 'secondary-button'; reset.type = 'button'; reset.textContent = '重置'; reset.dataset.rowAction = 'reset'; reset.disabled = !isResetQuotaEligible(account, quota[model.key]); reset.addEventListener('click', () => openReset(account, quota[model.key])); actions.append(refresh, reset);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
       const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
@@ -126,6 +128,61 @@ function bootPanel() {
   function addPeriod(rootSelector) {
     const periods = readPeriods(rootSelector); periods.push({ start: '', end: '' }); renderPeriods(rootSelector, periods); queueSimulation();
   }
+  function draftSignature() {
+    return JSON.stringify({
+      fields: [...$('#schedule-form').querySelectorAll('input[name]')].map((input) => [input.name, input.value]),
+      enabled: $('#schedule-enabled').checked,
+      weekdays: $$('#weekdays input:checked').map((input) => input.value),
+      skipTimes: state.skipTimes,
+      scheduled: [...state.scheduledKeys].sort(),
+    });
+  }
+  const isDraftDirty = () => state.savedDraftSignature !== undefined && draftSignature() !== state.savedDraftSignature;
+  function updateDraftStatus() { text('#schedule-dirty', isDraftDirty() ? '有未保存的修改' : '已保存'); }
+  function clearFieldErrors() {
+    $$('#schedule-form .field-error').forEach((node) => node.remove());
+    $$('#schedule-form [aria-invalid]').forEach((input) => { input.removeAttribute('aria-invalid'); input.removeAttribute('aria-describedby'); });
+  }
+  function validateScheduleForm({ showErrors = true } = {}) {
+    const form = $('#schedule-form'); const errors = new Map();
+    const field = (name) => form.elements[name];
+    const add = (name, message) => { if (!errors.has(name)) errors.set(name, message); };
+    for (const input of form.querySelectorAll('input[name]')) {
+      if (!input.checkValidity()) {
+        const label = input.closest('label')?.querySelector('span')?.textContent || '此项';
+        add(input.name, input.validity.valueMissing ? `请填写${label}。` : input.type === 'number' ? `请输入${input.min || '有效'}${input.max ? `–${input.max}` : '以上'}的整数。` : `请填写有效的${label}。`);
+      }
+    }
+    const timezone = field('timezone').value.trim();
+    try { if (!timezone || timezone === 'Local') throw new Error(); new Intl.DateTimeFormat('zh-CN', { timeZone: timezone }); }
+    catch { add('timezone', '请输入有效的 IANA 时区，例如 Asia/Shanghai。'); }
+    if (!field('probe_model').value.trim()) add('probe_model', '请填写检测模型。');
+    const work = field('work_start').value, lunch = field('lunch_start').value, resume = field('lunch_end').value, end = field('work_end').value;
+    if (work && lunch && work >= lunch) add('lunch_start', '午休开始必须晚于工作开始。');
+    if (lunch && resume && lunch > resume) add('lunch_end', '午休结束不能早于午休开始。');
+    if (resume && end && resume >= end) add('work_end', '工作结束必须晚于午休结束。');
+    const lead = field('preheat_lead_minutes').value, span = field('preheat_span_minutes').value;
+    if ($('#schedule-enabled').checked || lead !== '' || span !== '') {
+      if (!lead) add('preheat_lead_minutes', '请同时填写预热提前时间和预热时长。');
+      if (!span) add('preheat_span_minutes', '请同时填写预热提前时间和预热时长。');
+    }
+    if (lead && span && work) {
+      const [hours, minutes] = work.split(':').map(Number);
+      if (Number(lead) + Number(span) > hours * 60 + minutes) add('preheat_lead_minutes', '提前时间与预热时长之和不能超过当天工作开始时间，预热不能跨到前一天。');
+    }
+    if (showErrors) {
+      clearFieldErrors();
+      for (const [name, message] of errors) {
+        const input = field(name); const error = document.createElement('small');
+        error.id = `field-error-${name}`; error.className = 'field-error'; error.textContent = message;
+        input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', error.id); input.after(error);
+      }
+      const first = form.querySelector('[aria-invalid="true"]');
+      if (first) { const details = first.closest('details'); if (details) details.open = true; first.focus(); }
+      text('#schedule-feedback', errors.size ? `有 ${errors.size} 项参数需要修正，请查看字段下方提示。` : '');
+    }
+    return errors.size === 0;
+  }
   function applySchedule(schedule) {
     state.schedule = structuredClone(schedule || {}); $('#schedule-enabled').checked = Boolean(schedule.enabled); text('#schedule-revision', schedule.revision ?? '--');
     for (const name of ['timezone', 'window_hours', 'productivity_minutes', 'health_threshold_percent', 'preheat_lead_minutes', 'preheat_span_minutes', 'remaining_quota_floor_percent', 'remaining_window_floor_minutes', 'long_window_floor_percent', 'probe_model', 'probe_timeout_seconds']) setField(name, schedule[name] ?? '');
@@ -134,19 +191,22 @@ function bootPanel() {
     setField('work_start', periods[0]?.start || '09:00'); setField('lunch_start', periods[0]?.end || '12:00');
     setField('lunch_end', periods[1]?.start || '13:30'); setField('work_end', periods[1]?.end || '19:00');
     renderPeriods('#work-periods', periods); renderPeriods('#blackout-periods', schedule.blackout_periods || []);
-    renderWeekdays(schedule.weekdays || [1, 2, 3, 4, 5]); state.skipTimes = [...(schedule.skip_window_times || [])]; renderSkipTimes(); queueSimulation(); renderAccounts();
+    renderWeekdays(schedule.weekdays || [1, 2, 3, 4, 5]); state.skipTimes = [...(schedule.skip_window_times || [])]; renderSkipTimes();
+    clearFieldErrors(); text('#schedule-feedback', ''); state.savedDraftSignature = draftSignature(); queueSimulation(); renderAccounts();
   }
   function readSchedule() {
-    const form = $('#schedule-form'); const value = (name) => form.elements[name]?.value || ''; const integer = (name, fallback = 0) => Number.parseInt(value(name), 10) || fallback; const optionalInteger = (name) => value(name) === '' ? null : Number.parseInt(value(name), 10);
+    const form = $('#schedule-form'); const value = (name) => form.elements[name]?.value || ''; const integer = (name, fallback = 0) => value(name) === '' ? fallback : Number(value(name)); const optionalInteger = (name) => value(name) === '' ? null : Number(value(name));
     const fixedPeriods = [{ start: value('work_start'), end: value('lunch_start') }, { start: value('lunch_end'), end: value('work_end') }];
     const workPeriods = fixedPeriods.every((period) => period.start && period.end) ? fixedPeriods : readPeriods('#work-periods');
     return { ...state.schedule, enabled: $('#schedule-enabled').checked, timezone: value('timezone'), window_hours: integer('window_hours', 5), productivity_minutes: integer('productivity_minutes', 60), health_threshold_percent: integer('health_threshold_percent', 80), preheat_lead_minutes: optionalInteger('preheat_lead_minutes'), preheat_span_minutes: optionalInteger('preheat_span_minutes'), remaining_quota_floor_percent: integer('remaining_quota_floor_percent', 20), remaining_window_floor_minutes: integer('remaining_window_floor_minutes', 60), long_window_floor_percent: integer('long_window_floor_percent', 10), probe_model: value('probe_model'), probe_timeout_seconds: integer('probe_timeout_seconds', 30), weekdays: $$('#weekdays input:checked').map((input) => Number(input.value)), work_periods: workPeriods, blackout_periods: readPeriods('#blackout-periods'), skip_window_times: [...state.skipTimes], scheduled_account_keys: [...state.scheduledKeys] };
   }
 
   async function runSimulation() {
+    if (!validateScheduleForm({ showErrors: false })) { text('#simulation-output', '请补全有效参数后查看模拟结果；错误详情可点击“保存配置”定位。'); return; }
     const config = readSchedule(); try { const result = await request('/simulate', { method: 'POST', body: config }); renderSimulationComparison($('#simulation-output'), result, config); } catch (error) { text('#simulation-output', requestErrorMessage(error)); }
   }
   function queueSimulation() {
+    updateDraftStatus();
     clearTimeout(state.simulationTimer); state.simulationTimer = setTimeout(runSimulation, 180);
   }
 
@@ -163,37 +223,102 @@ function bootPanel() {
   }
 
   async function loadPanel() {
-    $('#connection').dataset.state = 'loading'; text('#connection', '正在加载数据…');
-    const jobs = await Promise.allSettled([request('/status'), hostManagementRequest('/auth-files'), request('/schedule'), request('/quota'), request('/history'), request('/reset-audit')]);
-    const value = (index, fallback) => jobs[index]?.status === 'fulfilled' ? jobs[index].value : fallback;
-    state.status = value(0, {}); state.accounts = normalizeHostAuthFiles(value(1, { files: [] })); const schedule = value(2, {}); state.quota = value(3, []); state.history = value(4, []); state.audit = value(5, []); state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
-    applySchedule(schedule || {}); renderHistory(); renderAudit(); $('#connection').dataset.state = 'ready'; text('#connection', '');
+    if (state.panelLoading || state.quotaBusy) return false;
+    state.panelLoading = true;
+    try {
+      $('#connection').dataset.state = 'loading'; text('#connection', '正在加载数据…');
+      const jobs = await Promise.allSettled([request('/status'), hostManagementRequest('/auth-files'), request('/schedule'), request('/quota'), request('/history'), request('/reset-audit')]);
+      const value = (index, fallback) => jobs[index]?.status === 'fulfilled' ? jobs[index].value : fallback;
+      state.status = value(0, state.status); if (jobs[1].status === 'fulfilled') state.accounts = normalizeHostAuthFiles(jobs[1].value);
+      state.quota = value(3, state.quota); state.history = value(4, state.history); state.audit = value(5, state.audit); state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
+      if (jobs[2].status === 'fulfilled' && !isDraftDirty()) applySchedule(jobs[2].value || {});
+      renderAccounts(); renderHistory(); renderAudit(); updateDraftStatus();
+      const failed = jobs.find((job) => job.status === 'rejected');
+      $('#connection').dataset.state = failed ? 'error' : 'ready';
+      text('#connection', failed ? `部分数据加载失败，已保留原数据。${requestErrorMessage(failed.reason)}` : '');
+      return !failed;
+    } finally { state.panelLoading = false; }
+  }
+
+  async function withQuotaRefresh(button, action) {
+    if (state.quotaBusy || state.panelLoading) return;
+    state.quotaBusy = true;
+    const controls = $$('[data-action="refresh-quota"], [data-action="refresh-all-quota"], [data-row-action="refresh"], [data-action="refresh-panel"]');
+    const previous = controls.map((control) => [control, control.disabled]);
+    controls.forEach((control) => { control.disabled = true; });
+    const label = button ? [...button.childNodes] : [];
+    if (button) { button.textContent = '刷新中…'; button.setAttribute('aria-busy', 'true'); }
+    text('#account-feedback', ''); text('#feedback', '');
+    try {
+      return await action();
+    } catch (error) { showError('#account-feedback', error); }
+    finally {
+      state.quotaBusy = false;
+      previous.forEach(([control, disabled]) => { control.disabled = disabled; });
+      if (button) { button.replaceChildren(...label); button.removeAttribute('aria-busy'); }
+      renderAccounts();
+    }
+  }
+
+  async function refreshQuotaSnapshots(keys) {
+    const capturedAt = Date.now();
+    const refreshed = await Promise.allSettled(keys.map(async (key) => {
+      const account = state.accounts.find((item) => item.account_key === key);
+      if (!account?.auth_index) throw new Error('账号缺少 auth_index');
+      const result = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', headers: { Accept: 'application/json' } }) });
+      const statusCode = Number(result?.status_code || result?.statusCode || 0);
+      if (statusCode < 200 || statusCode >= 300) throw new Error(`额度接口 HTTP ${statusCode || '-'}`);
+      const body = typeof result?.body === 'string' ? result.body : result?.data ?? result;
+      const usage = typeof body === 'string' ? JSON.parse(body) : body;
+      let resetPayload = null;
+      try {
+        const detail = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: { Accept: 'application/json', 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' } }) });
+        resetPayload = typeof detail?.body === 'string' ? JSON.parse(detail.body) : detail?.body ?? detail?.data ?? detail;
+      } catch { /* usage remains useful when reset detail is unavailable */ }
+      const normalized = normalizeCodexQuota(usage, { capturedAt, resetPayload });
+      if (!normalized.windows.length) throw new Error('额度接口未返回可识别窗口');
+      return { stale: false, refresh_error_code: '', snapshot: { account_key: key, captured_at: new Date(capturedAt).toISOString(), ...normalized } };
+    }));
+    const merged = quotaIndex(); let succeeded = 0;
+    refreshed.forEach((outcome, index) => {
+      const key = keys[index];
+      if (outcome.status === 'fulfilled') { merged[key] = outcome.value; succeeded++; }
+      else merged[key] = { ...merged[key], account_key: key, stale: true, refresh_error_code: requestErrorMessage(outcome.reason) };
+    });
+    state.quota = Object.values(merged); renderAccounts();
+    return { succeeded, failed: keys.length - succeeded };
+  }
+
+  function reportQuotaRefresh(outcome, skipped = 0) {
+    const message = `额度刷新：成功 ${outcome.succeeded}，失败 ${outcome.failed}，跳过 ${skipped}。`;
+    if (outcome.failed) text('#account-feedback', `${message}失败账号保留旧快照并标记过期，请检查错误原因后重试。`);
+    else notify(message);
   }
 
   async function refreshQuota(keys, button) {
-    if (!keys.length) { text('#account-feedback', '请先选择账号。'); return; }
-    button && (button.disabled = true); text('#account-feedback', '');
-    try {
-      const refreshed = await Promise.all(keys.map(async (key) => {
-        const account = state.accounts.find((item) => item.account_key === key);
-        if (!account?.auth_index) throw new Error('账号缺少 auth_index');
-        const capturedAt = Date.now();
-        const result = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', headers: { Accept: 'application/json' } }) });
-        const statusCode = Number(result?.status_code || result?.statusCode || 0);
-        if (statusCode < 200 || statusCode >= 300) throw new Error(`额度接口 HTTP ${statusCode || '-'}`);
-        const body = typeof result?.body === 'string' ? result.body : result?.data ?? result;
-        const usage = typeof body === 'string' ? JSON.parse(body) : body;
-        let resetPayload = null;
-        try {
-          const detail = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: { Accept: 'application/json', 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' } }) });
-          resetPayload = typeof detail?.body === 'string' ? JSON.parse(detail.body) : detail?.body ?? detail?.data ?? detail;
-        } catch { /* usage remains useful when reset detail is unavailable */ }
-        const normalized = normalizeCodexQuota(usage, { capturedAt, resetPayload });
-        if (!normalized.windows.length) throw new Error('额度接口未返回可识别窗口');
-        return { stale: false, refresh_error_code: '', snapshot: { account_key: key, captured_at: new Date(capturedAt).toISOString(), ...normalized } };
-      }));
-      const merged = quotaIndex(); for (const view of refreshed) merged[view.snapshot.account_key] = view; state.quota = Object.values(merged); renderAccounts(); notify('配额快照已刷新');
-    } catch (error) { showError('#account-feedback', error); } finally { button && (button.disabled = false); }
+    if (!keys.length) { text('#account-feedback', '请先选择账号，或使用“刷新全部额度”。'); return; }
+    return withQuotaRefresh(button, async () => {
+      const enabled = keys.filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled));
+      if (!enabled.length) { text('#account-feedback', '没有可刷新的已启用账号。'); return; }
+      const outcome = await refreshQuotaSnapshots(enabled);
+      reportQuotaRefresh(outcome, keys.length - enabled.length);
+      return outcome;
+    });
+  }
+
+  async function refreshAllQuota(button) {
+    return withQuotaRefresh(button, async () => {
+      const files = normalizeHostAuthFiles(await hostManagementRequest('/auth-files'));
+      const previous = new Set(state.selected);
+      state.accounts = files;
+      state.selected = new Set([...previous].filter((key) => files.some((account) => account.account_key === key && !account.disabled)));
+      renderAccounts();
+      const keys = files.filter((account) => !account.disabled).map((account) => account.account_key);
+      if (!keys.length) { text('#account-feedback', `没有可刷新的已启用账号。已发现 ${files.length} 个账号，均未发送额度请求。`); return; }
+      const outcome = await refreshQuotaSnapshots(keys);
+      reportQuotaRefresh(outcome, files.length - keys.length);
+      return outcome;
+    });
   }
 
   function openProbe() {
@@ -217,21 +342,37 @@ function bootPanel() {
     try { await request('/quota/reset', { method: 'POST', body: { account_key: intent.accountKey, idempotency_key: intent.idempotencyKey } }); intent.status = 'completed'; await refreshQuota([intent.accountKey]); state.audit = await request('/reset-audit'); renderAudit(); $('#reset-dialog').close(); notify('窗口重置完成'); } catch (error) { intent.status = 'failed'; showError('#reset-feedback', error); } finally { $('#reset-confirm').disabled = false; }
   }
 
-  $('[data-action="refresh-panel"]').addEventListener('click', (event) => loadPanel().then(() => notify('面板已刷新')).catch((error) => { $('#connection').dataset.state = 'error'; text('#connection', requestErrorMessage(error)); }));
-  $('[data-action="focus-settings"]').addEventListener('click', () => $('#settings').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  $('[data-action="refresh-panel"]').addEventListener('click', () => loadPanel().then((ok) => { if (ok) notify(isDraftDirty() ? '面板已刷新，未保存的配置已保留。' : '面板已刷新'); }).catch((error) => { $('#connection').dataset.state = 'error'; text('#connection', requestErrorMessage(error)); }));
+  $('[data-action="focus-settings"]').addEventListener('click', () => { $('#settings').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); $('#settings').focus({ preventScroll: true }); });
   $('[data-action="show-help"]').addEventListener('click', () => $('#help-dialog').showModal());
   $('[data-action="select-all"]').addEventListener('click', () => { state.selected = new Set(state.accounts.filter((account) => !account.disabled).map((account) => account.account_key)); renderAccounts(); });
   $('[data-action="select-none"]').addEventListener('click', () => { state.selected.clear(); renderAccounts(); });
   $('#select-all-checkbox').addEventListener('change', (event) => { state.selected = event.target.checked ? new Set(state.accounts.filter((account) => !account.disabled).map((account) => account.account_key)) : new Set(); renderAccounts(); });
   $('[data-action="toggle-identities"]').addEventListener('click', (event) => { state.hidden = !state.hidden; event.currentTarget.querySelector('span').textContent = state.hidden ? '显示身份' : '隐藏身份'; renderAccounts(); });
   $('[data-action="refresh-quota"]').addEventListener('click', (event) => refreshQuota([...state.selected], event.currentTarget));
+  $('[data-action="refresh-all-quota"]').addEventListener('click', (event) => refreshAllQuota(event.currentTarget));
   $('[data-action="run-probe"]').addEventListener('click', openProbe);
   $('[data-action="restore-schedule"]').addEventListener('click', () => applySchedule(state.schedule));
   $('[data-action="add-work-period"]')?.addEventListener('click', () => addPeriod('#work-periods'));
   $('[data-action="add-blackout-period"]')?.addEventListener('click', () => addPeriod('#blackout-periods'));
   $('[data-action="add-skip-window"]').addEventListener('click', () => { const input = $('#skip-window-input'); if (input.value && !state.skipTimes.includes(input.value)) { state.skipTimes.push(input.value); state.skipTimes.sort(); input.value = ''; renderSkipTimes(); queueSimulation(); } });
   $('#schedule-enabled').addEventListener('change', queueSimulation); $('#schedule-form').addEventListener('input', queueSimulation);
-  $('#schedule-form').addEventListener('submit', async (event) => { event.preventDefault(); const button = event.submitter; button.disabled = true; text('#schedule-feedback', ''); try { const saved = await request('/schedule', { method: 'PUT', headers: { 'If-Match': String(state.schedule.revision ?? 0) }, body: readSchedule() }); applySchedule(saved); notify('自动检测配置已保存'); } catch (error) { showError('#schedule-feedback', error); } finally { button.disabled = false; } });
+  $('#schedule-form').addEventListener('submit', async (event) => {
+    event.preventDefault(); if (state.saving || !validateScheduleForm()) return;
+    const button = event.submitter || $('#schedule-form button[type="submit"]');
+    const submitted = draftSignature(); const config = readSchedule();
+    state.saving = true; button.disabled = true; button.textContent = '保存中…'; button.setAttribute('aria-busy', 'true');
+    try {
+      const saved = await request('/schedule', { method: 'PUT', headers: { 'If-Match': String(state.schedule.revision ?? 0) }, body: config });
+      if (draftSignature() === submitted) applySchedule(saved);
+      else { state.schedule = structuredClone(saved); state.savedDraftSignature = submitted; text('#schedule-revision', saved.revision); updateDraftStatus(); }
+      notify(isDraftDirty() ? '提交的配置已保存，后续修改仍未保存。' : '自动检测配置已保存');
+    } catch (error) { showError('#schedule-feedback', error); }
+    finally { state.saving = false; button.disabled = false; button.textContent = '保存配置'; button.removeAttribute('aria-busy'); }
+  });
+  window.addEventListener('beforeunload', (event) => { if (isDraftDirty()) { event.preventDefault(); event.returnValue = ''; } });
+  for (const input of $$('#schedule-form input[type="number"]')) { input.step = '1'; input.required = !['preheat_lead_minutes', 'preheat_span_minutes'].includes(input.name); }
+  for (const name of ['preheat_lead_minutes', 'preheat_span_minutes']) $(`[name="${name}"]`).max = '1440';
   $('[data-action="load-records"]').addEventListener('click', async () => { try { state.history = await request('/history'); renderHistory(); notify('检测历史已刷新'); } catch (error) { notify(requestErrorMessage(error)); } });
   $('[data-action="load-audit"]').addEventListener('click', async () => { try { state.audit = await request('/reset-audit'); renderAudit(); notify('重置审计已刷新'); } catch (error) { notify(requestErrorMessage(error)); } });
   $('[data-action="clear-audit"]').addEventListener('click', () => { $('#audit-confirmation').value = ''; text('#audit-feedback', ''); $('#clear-audit-dialog').showModal(); });

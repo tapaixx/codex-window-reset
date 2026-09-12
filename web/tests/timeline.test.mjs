@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { simulationRange } from '../modules/timeline.js';
+import * as timeline from '../modules/timeline.js';
+import { simulationFixture } from './simulation-fixture.mjs';
+
+test('focused axis includes work and preheat with hour padding instead of an entire day', () => {
+  assert.equal(typeof timeline.simulationDomain, 'function');
+  assert.deepEqual(timeline.simulationDomain(simulationFixture, { timezone: 'Asia/Shanghai', work_periods: [{ start: '09:00', end: '19:00' }] }), { start: 300, end: 1200 });
+});
+
+test('focused axis stays inside the local day and has a safe empty fallback', () => {
+  assert.equal(typeof timeline.simulationDomain, 'function');
+  assert.deepEqual(timeline.simulationDomain({}, { work_periods: [{ start: '00:15', end: '23:45' }] }), { start: 0, end: 1440 });
+  assert.deepEqual(timeline.simulationDomain({}, {}), { start: 0, end: 1440 });
+});
 
 test('a zero-duration preheat instant is never stretched into a band ending at midnight', () => {
   assert.equal(simulationRange('2026-09-14T06:30:00+08:00', '2026-09-14T06:30:00+08:00', 'Asia/Shanghai'), null);
