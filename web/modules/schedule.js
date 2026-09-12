@@ -275,7 +275,6 @@ export function validateScheduleDraft(draft = {}) {
     if (!Number.isFinite(Number(draft.preheat_lead_minutes)) || Number(draft.preheat_lead_minutes) < 1) errors.push({ field: 'preheat_lead_minutes', message: 'Preheat lead is required before enabling the schedule.' });
     if (!Number.isFinite(Number(draft.preheat_span_minutes)) || Number(draft.preheat_span_minutes) < 1) errors.push({ field: 'preheat_span_minutes', message: 'Preheat span is required before enabling the schedule.' });
     if (!Array.isArray(draft.work_periods) || draft.work_periods.length === 0) errors.push({ field: 'work_periods', message: 'At least one work period is required before enabling the schedule.' });
-    if (!Array.isArray(draft.scheduled_account_keys) || draft.scheduled_account_keys.length === 0) errors.push({ field: 'scheduled_account_keys', message: 'At least one scheduled account is required before enabling the schedule.' });
   }
   return errors;
 }

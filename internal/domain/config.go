@@ -172,9 +172,6 @@ func ValidateConfig(cfg Config, mode ValidationMode, knownAccounts map[string]st
 		if len(cfg.WorkPeriods) == 0 {
 			return invalid("at least one work period is required when scheduling is enabled")
 		}
-		if len(cfg.ScheduledAccountKeys) == 0 {
-			return invalid("at least one scheduled account is required when scheduling is enabled")
-		}
 		if cfg.PreheatLeadMinutes == nil || cfg.PreheatSpanMinutes == nil {
 			return invalid("preheat lead and span are required when scheduling is enabled")
 		}
