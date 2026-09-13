@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 const productionFiles = [
   'panel.html',
   'styles.css',
+  'simulator.css',
   'modules/api.js',
   'modules/state.js',
   'modules/accounts.js',
@@ -20,6 +21,7 @@ const productionFiles = [
   'modules/history.js',
   'modules/dashboard.js',
   'modules/main.js',
+  'modules/timeline.js',
 ];
 
 async function readProduction(name) {
@@ -50,11 +52,6 @@ test('summary exposes the five operational counts from the confirmed design', as
     assert.match(html, new RegExp(`id=["']${id}["']`, 'u'));
   }
   assert.doesNotMatch(html, /id=["']summary-(?:total|warning|disabled|next)["']/u);
-});
-
-test('panel exposes the current release version', async () => {
-  const html = await readProduction('panel.html');
-  assert.match(html, /<span class="version">v0\.0\.8<\/span>/);
 });
 
 test('static buttons have accessible names and inputs have labels', async () => {

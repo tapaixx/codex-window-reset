@@ -55,6 +55,9 @@ type Runtime struct {
 	// storeErrorCode is intentionally only a code.  Repository errors may
 	// contain filesystem details and must not cross the management boundary.
 	storeErrorCode domain.ErrorCode
+	accountCache   []accounts.Account
+	accountCachedAt time.Time
+	accountMu      sync.Mutex
 }
 
 type runState struct {
@@ -376,7 +379,22 @@ func (r *Runtime) ListAccounts(ctx context.Context) ([]accounts.Account, error) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return r.deps.Accounts.List(ctx)
+	r.accountMu.Lock()
+	defer r.accountMu.Unlock()
+	r.mu.RLock()
+	if r.now().Sub(r.accountCachedAt) >= 0 && r.now().Sub(r.accountCachedAt) < 5*time.Second && r.accountCache != nil {
+		cached := append([]accounts.Account(nil), r.accountCache...)
+		r.mu.RUnlock()
+		return cached, nil
+	}
+	r.mu.RUnlock()
+	listed, err := r.deps.Accounts.List(ctx)
+	if err != nil { return nil, err }
+	r.mu.Lock()
+	r.accountCache = append([]accounts.Account(nil), listed...)
+	r.accountCachedAt = r.now()
+	r.mu.Unlock()
+	return listed, nil
 }
 
 // UpdateSchedule atomically replaces the persisted and live schedule. The

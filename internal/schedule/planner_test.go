@@ -87,10 +87,10 @@ func TestPlanDayRepeatsPreheatAcrossWindowCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(occurrences) != 2 {
-		t.Fatalf("occurrences=%d, want 2: %#v", len(occurrences), occurrences)
+	if len(occurrences) != 3 {
+		t.Fatalf("occurrences=%d, want 3: %#v", len(occurrences), occurrences)
 	}
-	want := []string{"08:22:30", "13:22:30"}
+	want := []string{"08:22:30", "13:22:30", "18:22:30"}
 	for index, occurrence := range occurrences {
 		if got := occurrence.PlannedAt.In(task4LocalDate(t, cfg.Timezone, "2026-09-14").Location()).Format("15:04:05"); got != want[index] {
 			t.Fatalf("occurrence %d=%s, want %s", index, got, want[index])

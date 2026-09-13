@@ -54,6 +54,16 @@ func TestValidateConfigRequiresActivationFields(t *testing.T) {
 	assertCode(t, err, CodeConfigInvalid)
 }
 
+func TestValidateConfigAllowsEnabledWithoutScheduledAccounts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	lead, span := 120, 60
+	cfg.PreheatLeadMinutes, cfg.PreheatSpanMinutes = &lead, &span
+	if err := ValidateConfig(cfg, ValidatePersisted, map[string]struct{}{}); err != nil {
+		t.Fatalf("expected empty account set to be valid, got %v", err)
+	}
+}
+
 func TestValidateConfigRejectsCrossMidnightAndUnknownAccount(t *testing.T) {
 	lead, span := 120, 60
 	cfg := DefaultConfig()

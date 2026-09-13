@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/tapaixx/codex-window-reset/internal/app"
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 	"github.com/tapaixx/codex-window-reset/internal/host"
+	"github.com/tapaixx/codex-window-reset/internal/simulate"
 	"github.com/tapaixx/codex-window-reset/internal/testabi"
 )
 
@@ -28,6 +31,53 @@ func TestDispatchRegistersManagementAndDynamicResources(t *testing.T) {
 	}
 	if !bytes.Contains(encoded, []byte("/plugins/codex-window-reset-linux-amd64/status")) || !bytes.Contains(encoded, []byte(`"Path":"/panel"`)) || bytes.Contains(encoded, []byte("/modules/main.js")) {
 		t.Fatalf("%s", encoded)
+	}
+}
+
+func TestEmbeddedPanelShowsTheBuildVersion(t *testing.T) {
+	prior := pluginVersion
+	t.Cleanup(func() { pluginVersion = prior })
+	for _, version := range []string{"0.0.9", "2.3.4-rc.1"} {
+		pluginVersion = version
+		panel, _, err := embeddedManagementAssets().Read("/panel")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []byte(`<span class="version">v` + version + `</span>`)
+		if !bytes.Contains(panel, want) {
+			t.Fatalf("served panel does not display build version %s", version)
+		}
+	}
+}
+
+// Optional fixture export lets browser acceptance use the actual embedded Go
+// response, including the linker-injected version and single-page bundling.
+func TestExportEmbeddedPanelForBrowser(t *testing.T) {
+	directory := os.Getenv("CWR_BROWSER_FIXTURE_DIR")
+	if directory == "" {
+		t.Skip("browser fixture export was not requested")
+	}
+	panel, _, err := embeddedManagementAssets().Read("/panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "panel.html"), panel, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := domain.DefaultConfig()
+	lead, span := 120, 60
+	cfg.PreheatLeadMinutes, cfg.PreheatSpanMinutes = &lead, &span
+	cfg.ScheduledAccountKeys = []string{"example"}
+	result, err := (simulate.Service{}).Run(cfg, time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "simulation.json"), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

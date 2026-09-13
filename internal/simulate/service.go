@@ -58,44 +58,42 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 		}
 	}
 
-	baselineWindows := make([]timeInterval, 0, len(workPeriods))
-	for _, period := range workPeriods {
-		baselineWindows = append(baselineWindows, clipInterval(timeInterval{
-			start: period.start,
-			end:   period.start.Add(productivity),
-		}, dayStart, dayEnd))
+	if cfg.WindowHours < 1 || cfg.WindowHours > 24 {
+		return domain.SimulationResult{}, &domain.Error{Code: domain.CodeConfigInvalid, Message: "window hours must be between 1 and 24", HTTPStatus: 400}
 	}
-
-	scheduledWindows := make([]timeInterval, 0, len(occurrences))
-	for _, occurrence := range occurrences {
-		if occurrence.Missed || occurrence.PlannedAt.IsZero() {
-			continue
+	cycle := time.Duration(cfg.WindowHours) * time.Hour
+	var baselineAnchor, scheduledAnchor time.Time
+	if len(work) > 0 {
+		baselineAnchor = work[0].start
+		scheduledAnchor = baselineAnchor
+		// One-account illustration: use the earliest actual preheat instant.
+		// Do not union staggered accounts' budgets or treat subsequent probes
+		// as forced resets of a still-running usage window.
+		for _, occurrence := range occurrences {
+			if !occurrence.Missed && !occurrence.PlannedAt.IsZero() && !occurrence.PlannedAt.Before(dayStart) && occurrence.PlannedAt.Before(scheduledAnchor) {
+				scheduledAnchor = occurrence.PlannedAt
+			}
 		}
-		scheduledWindows = append(scheduledWindows, clipInterval(timeInterval{
-			// A preheat request establishes the next request window at the
-			// configured lead boundary; model availability from that boundary,
-			// rather than counting the preheat request itself as work time.
-			start: occurrence.WindowEnd.Add(time.Duration(maxInt(cfg.PreheatLeadMinutes, 0)) * time.Minute),
-			end:   occurrence.WindowEnd.Add(time.Duration(maxInt(cfg.PreheatLeadMinutes, 0))*time.Minute + productivity),
-		}, dayStart, dayEnd))
 	}
-	baselineWindows = mergeIntervals(baselineWindows)
-	scheduledWindows = mergeIntervals(scheduledWindows)
-
-	baselineCoverage := coverageDuration(baselineWindows, work)
-	scheduledCoverage := coverageDuration(scheduledWindows, work)
-	baselineIdle := idleDuration(baselineWindows, baselineCoverage)
-	scheduledIdle := idleDuration(scheduledWindows, scheduledCoverage)
+	baselineAvailable, baselineWindows := cycleAvailability(work, baselineAnchor, cycle, productivity, dayStart, dayEnd)
+	scheduledAvailable, scheduledWindows := cycleAvailability(work, scheduledAnchor, cycle, productivity, dayStart, dayEnd)
+	baselineCoverage := totalDuration(baselineAvailable)
+	scheduledCoverage := totalDuration(scheduledAvailable)
+	// Idle window means wall-clock time outside work, not exhausted quota.
+	baselineIdle := idleDuration(baselineWindows, coverageDuration(baselineWindows, work))
+	scheduledIdle := idleDuration(scheduledWindows, coverageDuration(scheduledWindows, work))
 
 	return domain.SimulationResult{
 		WorkMinutes: workMinutes,
 		Baseline: domain.StrategyMetrics{
 			AvailableCoverageMinutes: wholeMinutes(baselineCoverage),
 			IdleWindowMinutes:        wholeMinutes(baselineIdle),
+			TimelineSegments:         strategyTimeline(dayStart, dayEnd, work, baselineAvailable),
 		},
 		Scheduled: domain.StrategyMetrics{
 			AvailableCoverageMinutes: wholeMinutes(scheduledCoverage),
 			IdleWindowMinutes:        wholeMinutes(scheduledIdle),
+			TimelineSegments:         strategyTimeline(dayStart, dayEnd, work, scheduledAvailable),
 		},
 		NetGainMinutes:   wholeMinutes(scheduledCoverage) - wholeMinutes(baselineCoverage),
 		PreheatWindows:   occurrences,
@@ -104,11 +102,65 @@ func (Service) Run(cfg domain.Config, date time.Time) (domain.SimulationResult, 
 	}, nil
 }
 
-func maxInt(value *int, fallback int) int {
-	if value == nil {
-		return fallback
+// Reference model: the anchor fixes the phase of recurring usage windows.
+// Each cycle has one productivity budget shared by all its work overlaps.
+// Breaks consume no productive minutes; renewal discards any old remainder.
+// This is a what-if estimate, not a prediction of upstream request success.
+func cycleAvailability(work []timeInterval, anchor time.Time, cycle, budget time.Duration, dayStart, dayEnd time.Time) (available, windows []timeInterval) {
+	if len(work) == 0 || anchor.IsZero() {
+		return nil, nil
 	}
-	return *value
+	for start := anchor; start.Before(work[len(work)-1].end); start = start.Add(cycle) {
+		window := clipInterval(timeInterval{start: start, end: start.Add(cycle)}, dayStart, dayEnd)
+		windows = append(windows, window)
+		remaining := budget
+		for _, period := range work {
+			overlap := clipInterval(period, window.start, window.end)
+			if !overlap.end.After(overlap.start) || remaining <= 0 {
+				continue
+			}
+			used := overlap.end.Sub(overlap.start)
+			if used > remaining {
+				used = remaining
+			}
+			available = append(available, timeInterval{start: overlap.start, end: overlap.start.Add(used)})
+			remaining -= used
+		}
+	}
+	return mergeIntervals(available), mergeIntervals(windows)
+}
+
+// The chart and metrics consume the same intervals. The browser only lays out
+// these segments; it must not invent coverage or reuse A's segments for B.
+func strategyTimeline(dayStart, dayEnd time.Time, work, available []timeInterval) []domain.TimelineSegment {
+	boundaries := []time.Time{dayStart, dayEnd}
+	for _, intervals := range [][]timeInterval{work, available} {
+		for _, interval := range intervals {
+			boundaries = append(boundaries, interval.start, interval.end)
+		}
+	}
+	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
+	boundaries = uniqueTimes(boundaries)
+	segments := make([]domain.TimelineSegment, 0, len(boundaries))
+	for i := 0; i+1 < len(boundaries); i++ {
+		start, end := boundaries[i], boundaries[i+1]
+		midpoint := start.Add(end.Sub(start) / 2)
+		kind := "idle"
+		if containsInstant(work, midpoint) {
+			kind = "limited"
+			if containsInstant(available, midpoint) {
+				kind = "available"
+			}
+		} else if len(work) > 0 && midpoint.After(work[0].start) && midpoint.Before(work[len(work)-1].end) {
+			kind = "break"
+		}
+		if len(segments) > 0 && segments[len(segments)-1].Kind == kind {
+			segments[len(segments)-1].End = end
+		} else {
+			segments = append(segments, domain.TimelineSegment{Kind: kind, Start: start, End: end})
+		}
+	}
+	return segments
 }
 
 type timeInterval struct {

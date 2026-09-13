@@ -72,10 +72,13 @@ func PlanDay(cfg domain.Config, date time.Time) ([]domain.PlannedOccurrence, err
 	}
 	anchors := make([]int, 0, len(workPeriods))
 	if len(workPeriods) > 0 {
-		for anchor := workPeriods[0].start; anchor < workPeriods[len(workPeriods)-1].end; anchor += windowMinutes {
+		// Include a renewal exactly at the end of the final work period.  The
+		// short window that expires at that instant is still usable during the
+		// configured work period, so it needs its own preheat occurrence.
+		for anchor := workPeriods[0].start; anchor <= workPeriods[len(workPeriods)-1].end; anchor += windowMinutes {
 			insideWork := false
-			for _, work := range workPeriods {
-				if anchor >= work.start && anchor < work.end {
+			for index, work := range workPeriods {
+				if anchor >= work.start && (anchor < work.end || (index == len(workPeriods)-1 && anchor == work.end)) {
 					insideWork = true
 					break
 				}

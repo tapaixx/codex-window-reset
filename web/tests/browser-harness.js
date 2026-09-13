@@ -9,7 +9,9 @@
   window.addEventListener('unhandledrejection', (event) => result.clientErrors.push(`rejection: ${event.reason?.stack || event.reason || 'unknown'}`));
   try {
     const mode = new URL(location.href).searchParams.get('browser_test');
-    if (mode === 'reset') await checkResetConfirmation(result);
+    if (mode?.startsWith('audit-')) await checkUIAudit(mode);
+    else if (mode === 'reset') await checkResetConfirmation(result);
+    else if (mode?.startsWith('simulator')) await checkSimulator(result);
     else if (mode === 'contracts') await checkScheduleAndProbeContracts(result);
     else await checkResponsiveLayout(result);
     result.ok = true;
@@ -18,6 +20,173 @@
   }
   output.textContent = JSON.stringify(result);
 })();
+
+async function checkUIAudit(mode) {
+  await waitForPanel();
+  const $ = (selector) => document.querySelector(selector);
+  const assert = (value, message) => { if (!value) throw new Error(message); };
+  const configure = (controls) => fetch('/__browser-state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(controls) });
+  const set = (name, value) => { const input = $(`[name="${name}"]`); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); };
+  const save = () => $('#schedule-form button[type=submit]').click();
+  const refresh = async () => {
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => !$('[data-action="refresh-all-quota"]').disabled, 'refresh-all did not complete');
+  };
+  const file = (auth_index, disabled = false) => ({ provider: 'codex', auth_index, email: `${auth_index}@example.com`, account_id: `acct_${auth_index}`, disabled });
+  if (mode === 'audit-refresh') {
+    $('[data-account-selection]').click();
+    $('[data-account-scheduled]').click();
+    // A disabled credential becomes enabled in the host; a new one is discovered too.
+    await configure({ files: [file('browser'), file('revived', true)] }); await refresh();
+    await configure({ files: [file('browser'), file('revived'), file('new'), file('disabled', true)], failAuthIndexes: ['browser'] });
+    const before = (await fixtureState()).quotaRefreshRequests.length;
+    await refresh();
+    const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
+    assert(requests.some((r) => r.auth_index === 'revived') && requests.some((r) => r.auth_index === 'new'), 're-enabled/new credentials were not refreshed');
+    assert(!requests.some((r) => r.auth_index === 'disabled'), 'disabled credential was refreshed');
+    assert($('#accounts-table [data-account-key="acct-revived"]').textContent.includes('80%'), 'successful quota lost when another account fails');
+    assert($('#accounts-table [data-account-key="acct-browser"]').textContent.includes('已过期'), 'failed quota was not marked stale');
+    assert($('[data-account-selection="acct-browser"]').checked, 'manual selection was lost');
+    assert($('[data-account-scheduled="acct-browser"]').checked && !$('[data-account-scheduled="acct-revived"]').checked, 'refresh changed scheduled membership');
+    assert(/失败\s*1/.test($('#account-feedback').textContent), 'partial failure summary missing');
+    assert(!$('#feedback').textContent.includes('刷新全部额度'), 'partial failure falsely announced total success');
+  } else if (mode === 'audit-refresh-empty') {
+    await configure({ files: [file('disabled', true)] });
+    const before = (await fixtureState()).quotaRefreshRequests.length; await refresh();
+    assert((await fixtureState()).quotaRefreshRequests.length === before, 'empty enabled set sent quota calls');
+    assert(/没有可刷新的已启用账号/.test($('#account-feedback').textContent), 'empty enabled set has misleading selection/success message');
+  } else if (mode === 'audit-refresh-failure') {
+    await configure({ failAuthIndexes: ['browser'] }); await refresh();
+    assert(/失败\s*1/.test($('#account-feedback').textContent), 'all-failure summary missing');
+    assert(!/全部.*刷新|刷新全部额度/.test($('#feedback').textContent), 'failed request announced success');
+    await configure({ authFailure: true }); await refresh();
+    assert($('[data-account-selection]'), 'failed discovery destroyed existing accounts');
+  } else if (mode === 'audit-draft') {
+    set('window_hours', '6'); $('[data-account-scheduled]').click();
+    const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event);
+    assert(event.defaultPrevented, 'unsaved navigation is not guarded');
+    $('[data-action="refresh-panel"]').click();
+    await waitFor(() => $('#connection').dataset.state === 'ready', 'panel refresh failed');
+    assert($('[name="window_hours"]').value === '6' && $('[data-account-scheduled]').checked, 'header refresh overwrote the draft');
+    assert($('#schedule-dirty')?.textContent.includes('未保存'), 'dirty indicator missing');
+    await configure({ saveDelay: true }); save();
+    assert($('#schedule-form button[type=submit]').textContent.includes('保存中'), 'save loading state missing');
+    set('window_hours', '7');
+    await waitFor(() => !$('#schedule-form button[type=submit]').disabled, 'save did not complete');
+    assert($('[name="window_hours"]').value === '7', 'save response overwrote edits made during save');
+    save(); await waitFor(() => !$('#schedule-form button[type=submit]').disabled, 'second save did not complete');
+    const clean = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(clean);
+    assert(!clean.defaultPrevented, 'saved form still warns about unsaved changes');
+  } else if (mode === 'audit-validation') {
+    const before = (await fixtureState()).scheduleRequests.length;
+    set('timezone', 'Invalid/Zone'); save();
+    assert($('[name="timezone"]').getAttribute('aria-invalid') === 'true', 'invalid timezone lacks field error');
+    assert(document.activeElement === $('[name="timezone"]'), 'first invalid field did not receive focus');
+    assert(document.getElementById($('[name="timezone"]').getAttribute('aria-describedby'))?.textContent, 'field error is not associated with input');
+    assert((await fixtureState()).scheduleRequests.length === before, 'invalid draft was submitted');
+    set('timezone', 'Asia/Shanghai'); set('work_start', '15:00'); save();
+    assert($('[name="lunch_start"]').getAttribute('aria-invalid') === 'true', 'invalid work/lunch ordering not identified');
+    set('work_start', '09:00'); set('preheat_lead_minutes', '120'); set('preheat_span_minutes', ''); save();
+    assert($('[name="preheat_span_minutes"]').getAttribute('aria-invalid') === 'true', 'paired preheat requirement missing');
+    set('preheat_span_minutes', '60'); set('probe_timeout_seconds', '1'); save();
+    assert($('#schedule-form details').open && document.activeElement === $('[name="probe_timeout_seconds"]'), 'advanced invalid field stays hidden');
+    set('probe_timeout_seconds', '30'); set('health_threshold_percent', '0'); set('remaining_quota_floor_percent', '0'); set('long_window_floor_percent', '0'); save();
+    const state = await waitFor(async () => { const state = await fixtureState(); return state.scheduleRequests.length > before && state; }, 'valid config not saved');
+    assert(state.scheduleRequests.at(-1).health_threshold_percent === 0 && state.scheduleRequests.at(-1).remaining_quota_floor_percent === 0 && state.scheduleRequests.at(-1).long_window_floor_percent === 0, 'valid zero thresholds replaced by defaults');
+  } else if (mode === 'audit-axis') {
+    await waitFor(() => $('.timeline-lane'), 'axis not rendered');
+    const ticks = [...document.querySelectorAll('.timeline-ruler span')];
+    assert(ticks[0].textContent === '05:00' && ticks.at(-1).textContent === '20:00', 'axis still wastes space outside work/preheat context');
+    const start = $('.timeline-lane [data-kind="available"]').getBoundingClientRect().left;
+    const marker = $('.work-boundary').getBoundingClientRect().left;
+    assert(Math.abs(start - marker) < 2, `work boundary misaligned by ${start - marker}px`);
+    assert($('.sim-metric.gain strong')?.textContent === '+1小时', 'preheat renewal benefit is missing from metrics');
+    assert($('.strategy-a').textContent.includes('上班后第一次使用才开启窗口') && $('.strategy-b').textContent.includes('上班前先使用自动预热'), 'A/B explanations are unclear');
+    set('work_start', '02:15');
+    await waitFor(() => $('.timeline-ruler span')?.textContent === '01:00', 'axis did not follow edited work time');
+    assert([...document.querySelectorAll('.timeline-ruler span')].at(-1).textContent === '20:00', 'odd-hour domain lost its final tick');
+  } else if (mode === 'audit-zero-gain') {
+    await configure({ zeroGain: true }); set('window_hours', '24');
+    await waitFor(() => $('.sim-metrics')?.textContent.includes('当前参数下无额外收益'), 'zero gain not explained');
+    assert(!$('.sim-metric.gain'), 'zero gain presented as positive');
+  } else if (mode === 'audit-accessibility') {
+    assert($('[data-account-selection]').getBoundingClientRect().width > 0, 'mobile individual account checkbox is hidden');
+    const skip = $('#skip-window-input');
+    assert(skip.labels.length || skip.getAttribute('aria-label'), 'skip time input has no accessible label');
+    assert($('[data-action="refresh-quota"]').textContent.includes('刷新已选额度'), 'selected refresh scope unclear');
+    assert($('[data-action="refresh-quota"]').getBoundingClientRect().width >= 130, 'mobile refresh label is squeezed into several lines');
+    for (const dialog of document.querySelectorAll('dialog')) assert(document.getElementById(dialog.getAttribute('aria-labelledby'))?.textContent, `dialog ${dialog.id} has no name`);
+    const input = $('#schedule-enabled'); input.focus();
+    assert(getComputedStyle(input.nextElementSibling).outlineStyle !== 'none', 'switch has no visible focus');
+  } else if (mode === 'audit-theme-dark') {
+    assert(getComputedStyle(document.documentElement).colorScheme === 'dark', 'page color-scheme stayed light');
+    for (const selector of ['.topbar', '.accounts-panel', '.history-panel', '#reset-dialog', '.toolbar']) {
+      const color = getComputedStyle($(selector)).backgroundColor.match(/\d+/g)?.slice(0, 3).map(Number);
+      assert(color?.every((v) => v < 100), `${selector} stayed light in dark mode`);
+    }
+    await waitFor(() => $('.work-boundary'), 'dark timeline did not render');
+    for (const selector of ['.work-boundary', '.weekday-chip:has(input:checked)']) {
+      const style = getComputedStyle($(selector));
+      const luminance = (color) => { const channels = color.match(/\d+/g).slice(0, 3).map((v) => { const c = Number(v) / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722; };
+      const foreground = luminance(style.color), background = luminance(getComputedStyle($('.simulation-workspace')).backgroundColor);
+      assert((Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05) >= 4.5, `${selector} text has insufficient dark contrast`);
+    }
+  } else if (mode === 'audit-navigation') {
+    const scroll = Element.prototype.scrollIntoView; let options;
+    Element.prototype.scrollIntoView = function (value) { options = value; scroll.call(this, value); };
+    $('[data-action="focus-settings"]').click();
+    assert(options?.behavior !== 'smooth', 'reduced motion ignored for settings navigation');
+    assert($('#settings').getBoundingClientRect().top >= $('.topbar').getBoundingClientRect().bottom, 'sticky header obscures settings');
+  }
+}
+
+async function checkSimulator(result) {
+  await waitForPanel();
+  await waitFor(() => document.querySelector('.timeline-lane'), 'simulator did not render');
+  const [a, b] = document.querySelectorAll('.timeline-lane');
+  result.trackA = a.innerHTML;
+  result.trackB = b.innerHTML;
+  if (result.trackA === result.trackB) throw new Error('A/B time axes incorrectly display identical segments');
+  result.availableA = a.querySelectorAll('[data-kind="available"]').length;
+  result.availableB = b.querySelectorAll('[data-kind="available"]').length;
+  const ranges = (lane) => [...lane.querySelectorAll('[data-kind="available"]')].map((band) => band.title.replace('预计可用 ', ''));
+  if (JSON.stringify(ranges(a)) !== JSON.stringify(['09:00–10:00', '14:00–15:00'])) throw new Error(`A incorrectly renews at lunch: ${ranges(a)}`);
+  if (JSON.stringify(ranges(b)) !== JSON.stringify(['09:00–10:00', '11:30–12:00', '13:30–14:00', '16:30–17:30'])) throw new Error(`B is still limited after preheat-window renewal: ${ranges(b)}`);
+  if (document.querySelector('.sim-metric.gain strong')?.textContent !== '+1小时') throw new Error('metric does not match the 60-minute timeline gain');
+  const markers = [...b.querySelectorAll('[data-preheat-marker]')];
+  result.markers = markers.length;
+  if (markers.some((node) => node.getBoundingClientRect().width > 30)) throw new Error('point marker expanded into a duration band');
+  result.hasLegend = ['预计可用', '预计受限', '午休', '预热'].every((label) => document.querySelector('.timeline-legend')?.textContent.includes(label));
+  result.readable = parseFloat(getComputedStyle(document.querySelector('.timeline-ruler span')).fontSize) >= 12;
+  result.pageOverflow = document.documentElement.scrollWidth > innerWidth;
+  result.pageVersion = document.querySelector('.version').textContent;
+  result.theme = document.documentElement.dataset.theme;
+  result.assumptions = document.querySelector('.simulation-assumptions').textContent;
+  if (!result.assumptions.includes('单账户示例') || !result.assumptions.includes('午休不消耗')) throw new Error('simulation does not disclose its account and budget assumptions');
+  result.assetRequests = (await fixtureState()).assetRequests;
+  const beforeRefreshAll = await fixtureState();
+  document.querySelector('[data-action="refresh-all-quota"]').click();
+  const afterRefreshAll = await waitFor(async () => {
+    const state = await fixtureState();
+    return state.authFilesRequests.length > beforeRefreshAll.authFilesRequests.length && state.quotaRefreshRequests.length > beforeRefreshAll.quotaRefreshRequests.length ? state : null;
+  }, 'refresh-all quota did not rediscover accounts and refresh quota');
+  result.refreshAll = { authFiles: afterRefreshAll.authFilesRequests.length - beforeRefreshAll.authFilesRequests.length, quotaCalls: afterRefreshAll.quotaRefreshRequests.length - beforeRefreshAll.quotaRefreshRequests.length };
+  const focusPoint = document.querySelector('[data-preheat-marker]');
+  focusPoint?.focus();
+  if (focusPoint && getComputedStyle(focusPoint.querySelector('.preheat-tooltip')).display === 'none') throw new Error(`preheat detail is unavailable to keyboard focus: ${JSON.stringify({ active: document.activeElement?.outerHTML, connected: focusPoint.isConnected, focused: focusPoint.matches(':focus'), disabled: focusPoint.disabled })}`);
+  focusPoint?.blur();
+  const before = (await fixtureState()).scheduleRequests.length;
+  document.querySelector('#schedule-enabled').checked = true;
+  document.querySelector('[name="preheat_lead_minutes"]').value = '120';
+  document.querySelector('[name="preheat_span_minutes"]').value = '60';
+  document.querySelector('#schedule-form button[type="submit"]').click();
+  const saved = await waitFor(async () => {
+    const state = await fixtureState();
+    return state.scheduleRequests.length > before ? state : null;
+  }, 'empty account schedule could not be saved');
+  result.emptySchedule = saved.scheduleRequests.at(-1);
+  document.querySelector('.strategy-grid').scrollIntoView({ block: 'start' });
+}
 
 async function waitFor(predicate, message, timeout = 5000) {
   const deadline = performance.now() + timeout;

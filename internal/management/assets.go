@@ -1,6 +1,7 @@
 package management
 
 import (
+	"html"
 	"io/fs"
 	"strings"
 )
@@ -17,11 +18,12 @@ var assetPaths = []string{
 // The root package supplies an embed.FS in production; tests and host adapters
 // can provide os.DirFS or another fs.FS without changing the router.
 type Assets struct {
-	FS fs.FS
+	FS      fs.FS
+	Version string
 }
 
 func NewAssets(files fs.FS) Assets {
-	return Assets{FS: files}
+	return Assets{FS: files, Version: "0.0.0-dev"}
 }
 
 func (a Assets) Read(assetPath string) ([]byte, string, error) {
@@ -65,8 +67,12 @@ func (a Assets) inlinePanel() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	simulatorStyle, err := a.read("simulator.css")
+	if err != nil {
+		return nil, err
+	}
 	scripts := make([]string, 0, 3)
-	for _, name := range []string{"modules/api.js", "modules/dashboard.js", "modules/main.js"} {
+	for _, name := range []string{"modules/api.js", "modules/dashboard.js", "modules/timeline.js", "modules/main.js"} {
 		source, readErr := a.read(name)
 		if readErr != nil {
 			return nil, readErr
@@ -82,9 +88,15 @@ func (a Assets) inlinePanel() ([]byte, error) {
 		scripts = append(scripts, strings.Join(kept, "\n"))
 	}
 	html := string(panel)
+	html = strings.ReplaceAll(html, "{{PLUGIN_VERSION}}", escapePanelVersion(a.Version))
 	html = strings.Replace(html, `<link rel="stylesheet" href="./styles.css">`, "<style>"+string(style)+"</style>", 1)
+	html = strings.Replace(html, `<link rel="stylesheet" href="./simulator.css">`, "<style>"+string(simulatorStyle)+"</style>", 1)
 	html = strings.Replace(html, `<script type="module" src="./modules/main.js"></script>`, "<script>"+strings.Join(scripts, "\n")+"</script>", 1)
 	return []byte(html), nil
+}
+
+func escapePanelVersion(version string) string {
+	return html.EscapeString("v" + strings.TrimPrefix(version, "v"))
 }
 
 func normalizeAssetPath(value string) string {

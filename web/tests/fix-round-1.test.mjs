@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../modules/state.js';
-import { serializeScheduleDraft } from '../modules/schedule.js';
+import { serializeScheduleDraft, validateScheduleDraft } from '../modules/schedule.js';
 import { isResetQuotaEligible } from '../modules/main.js';
 import {
   accountStatusValue,
@@ -48,6 +48,19 @@ test('schedule serialization emits only Config keys and nested period arrays', (
   assert.deepEqual(serialized.work_periods, [{ start: '09:00', end: '12:00' }]);
   assert.deepEqual(serialized.blackout_periods, [{ start: '12:00', end: '13:00' }]);
   assert.equal(Object.keys(serialized).some((key) => /(?:work|blackout)_periods\[\d+\]\./u.test(key)), false);
+});
+
+test('schedule validation allows an enabled schedule with no selected accounts', () => {
+  const errors = validateScheduleDraft({
+    enabled: true,
+    timezone: 'Asia/Shanghai',
+    probe_model: 'gpt-5.6-luna',
+    preheat_lead_minutes: 120,
+    preheat_span_minutes: 60,
+    work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '19:00' }],
+    scheduled_account_keys: [],
+  });
+  assert.deepEqual(errors, []);
 });
 
 test('reset eligibility requires a successful snapshot no older than five minutes', () => {
