@@ -309,7 +309,7 @@ async function serveManagementFixture(request, response, path, state) {
         enabled: false,
         timezone: 'Asia/Shanghai',
         weekdays: [1, 2, 3, 4, 5],
-        work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }],
+        work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '19:00' }],
         preheat_lead_minutes: null,
         preheat_span_minutes: null,
         productivity_minutes: 60,
