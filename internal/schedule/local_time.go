@@ -93,14 +93,18 @@ func firstValidMinute(location *time.Location, date time.Time, from, before int)
 // a spring-forward gap. If the interval contains no valid minute it is
 // unusable.
 func resolveWallInterval(location *time.Location, date time.Time, interval wallInterval) (instantInterval, bool) {
-	if interval.start < 0 || interval.end > minutesPerLocalDay || interval.start >= interval.end {
+	if interval.start < 0 || interval.start >= minutesPerLocalDay || interval.start >= interval.end {
 		return instantInterval{}, false
 	}
 	start, ok := firstValidMinute(location, date, interval.start, interval.end)
 	if !ok {
 		return instantInterval{}, false
 	}
-	end, ok := firstValidMinute(location, date, interval.end, minutesPerLocalDay)
+	// The final derived preheat window may extend past midnight. Resolve its
+	// original end without clipping; PlanDay filters out next-day slots after
+	// staggering so same-day accounts are not moved to an earlier time.
+	endDate := date.AddDate(0, 0, interval.end/minutesPerLocalDay)
+	end, ok := firstValidMinute(location, endDate, interval.end%minutesPerLocalDay, minutesPerLocalDay)
 	if !ok || !end.After(start) {
 		return instantInterval{}, false
 	}
@@ -155,13 +159,9 @@ func subtractBlackouts(base wallInterval, blackouts []wallInterval) []wallInterv
 }
 
 func resolveWindowBoundaries(location *time.Location, date time.Time, interval wallInterval) (time.Time, time.Time, bool) {
-	start, ok := firstValidMinute(location, date, interval.start, interval.end)
+	resolved, ok := resolveWallInterval(location, date, interval)
 	if !ok {
 		return time.Time{}, time.Time{}, false
 	}
-	end, ok := firstValidMinute(location, date, interval.end, minutesPerLocalDay)
-	if !ok || !end.After(start) {
-		return time.Time{}, time.Time{}, false
-	}
-	return start, end, true
+	return resolved.start, resolved.end, true
 }

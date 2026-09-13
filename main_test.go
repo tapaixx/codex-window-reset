@@ -65,6 +65,9 @@ func TestExportEmbeddedPanelForBrowser(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := domain.DefaultConfig()
+	// A non-cycle-aligned work end catches the missing 16:30 renewal; the
+	// previous 19:00 fixture only exercised equality at the nominal anchor.
+	cfg.WorkPeriods[len(cfg.WorkPeriods)-1].End = "18:00"
 	lead, span := 120, 60
 	cfg.PreheatLeadMinutes, cfg.PreheatSpanMinutes = &lead, &span
 	cfg.ScheduledAccountKeys = []string{"example"}

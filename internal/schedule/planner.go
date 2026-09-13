@@ -20,8 +20,8 @@ func (Planner) PlanDay(cfg domain.Config, date time.Time) ([]domain.PlannedOccur
 	return PlanDay(cfg, date)
 }
 
-// PlanDay derives one occurrence per scheduled account for each configured
-// work period on date. date's calendar components are treated as the local
+// PlanDay derives staggered occurrences across the short-window cycles needed
+// on date. date's calendar components are treated as the local
 // date; callers do not need to pass a time.Time in cfg.Timezone.
 func PlanDay(cfg domain.Config, date time.Time) ([]domain.PlannedOccurrence, error) {
 	location, err := time.LoadLocation(cfg.Timezone)
@@ -71,26 +71,50 @@ func PlanDay(cfg domain.Config, date time.Time) ([]domain.PlannedOccurrence, err
 		skipTimes[minutes.Hour()*60+minutes.Minute()] = struct{}{}
 	}
 	anchors := make([]int, 0, len(workPeriods))
-	if len(workPeriods) > 0 {
-		// Include a renewal exactly at the end of the final work period.  The
-		// short window that expires at that instant is still usable during the
-		// configured work period, so it needs its own preheat occurrence.
-		for anchor := workPeriods[0].start; anchor <= workPeriods[len(workPeriods)-1].end; anchor += windowMinutes {
-			insideWork := false
-			for index, work := range workPeriods {
-				if anchor >= work.start && (anchor < work.end || (index == len(workPeriods)-1 && anchor == work.end)) {
-					insideWork = true
-					break
-				}
+	lastWorkEnd := workPeriods[len(workPeriods)-1].end
+	insideWork := func(minute int) bool {
+		for _, work := range workPeriods {
+			if minute >= work.start && minute < work.end {
+				return true
 			}
-			if _, skipped := skipTimes[anchor]; insideWork && !skipped {
-				anchors = append(anchors, anchor)
+		}
+		return false
+	}
+	// Keep every legacy batch's identity AND rank seed. Inserting a newly
+	// eligible renewal before an existing batch must not renumber persisted
+	// successes/misses into new requests on upgrade. New batches use indices
+	// after the legacy set; returned occurrences still follow time order.
+	periodIndexes := make(map[int]int)
+	for anchor := workPeriods[0].start; anchor <= lastWorkEnd; anchor += windowMinutes {
+		if _, skipped := skipTimes[anchor]; !skipped && (insideWork(anchor) || anchor == lastWorkEnd) {
+			periodIndexes[anchor] = len(periodIndexes)
+		}
+	}
+	// A nominal anchor can fall after work even though its derived preheat
+	// still falls inside work (19:00 -> 16:00–17:00). Keep the original
+	// before-work batches and also consider every window overlapping work.
+	for anchor := workPeriods[0].start; anchor-*cfg.PreheatLeadMinutes-*cfg.PreheatSpanMinutes < lastWorkEnd; anchor += windowMinutes {
+		windowEnd := anchor - *cfg.PreheatLeadMinutes
+		windowStart := windowEnd - *cfg.PreheatSpanMinutes
+		_, eligible := periodIndexes[anchor]
+		for _, work := range workPeriods {
+			if windowStart < work.end && windowEnd > work.start {
+				eligible = true
+				break
 			}
+		}
+		if _, skipped := skipTimes[anchor%minutesPerLocalDay]; eligible && !skipped {
+			anchors = append(anchors, anchor)
 		}
 	}
 	occurrences := make([]domain.PlannedOccurrence, 0, len(anchors)*len(accounts))
 
-	for periodIndex, anchor := range anchors {
+	for _, anchor := range anchors {
+		periodIndex, legacy := periodIndexes[anchor]
+		if !legacy {
+			periodIndex = len(periodIndexes)
+			periodIndexes[anchor] = periodIndex
+		}
 		windowEnd := anchor - *cfg.PreheatLeadMinutes
 		windowStart := windowEnd - *cfg.PreheatSpanMinutes
 		if windowStart < 0 || windowStart >= windowEnd {
@@ -142,6 +166,13 @@ func PlanDay(cfg domain.Config, date time.Time) ([]domain.PlannedOccurrence, err
 		for index, account := range ranked {
 			offset := total * time.Duration(2*index+1) / time.Duration(2*len(ranked))
 			plannedAt := instantAtOffset(allowed, offset)
+			minute := plannedAt.Hour()*60 + plannedAt.Minute()
+			// Filter AFTER staggering: clipping a window to work end would pull
+			// later slots forward and issue requests before their intended time.
+			if plannedAt.Format("2006-01-02") != dateString || minute >= lastWorkEnd ||
+				(!legacy && !insideWork(minute)) {
+				continue
+			}
 			occurrences = append(occurrences, domain.PlannedOccurrence{
 				ID:          OccurrenceID(dateString, periodIndex, account.key),
 				AccountKey:  account.key,

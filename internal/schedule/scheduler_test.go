@@ -289,6 +289,72 @@ func schedulerTestConfig() domain.Config {
 	return domain.Config{Enabled: true, Timezone: "UTC", ScheduledAccountKeys: []string{"a"}}
 }
 
+func TestSchedulerExecutesRealPlannerLateWorkRenewalOnce(t *testing.T) {
+	now := schedulerInstant("2026-09-14T15:59:00+08:00")
+	fx := newSchedulerFixture(t, now, domain.RuntimeState{})
+	fx.scheduler = NewScheduler(fx.clock, Planner{}, fx.states, fx.executor)
+	cfg := task4ValidConfig("Asia/Shanghai", "09:00", "18:00", 120, 60, []string{"a"})
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(cfg); err != nil {
+		t.Fatal(err)
+	}
+	id := "2026-09-14/p2/a"
+	want := schedulerInstant("2026-09-14T16:30:00+08:00")
+	if next := fx.states.saved().NextRuns[id]; !next.Equal(want) {
+		t.Fatalf("third preheat next run = %v, want %v", next, want)
+	}
+	fx.clock.Advance(31 * time.Minute)
+	select {
+	case <-fx.executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("16:30 preheat never executed")
+	}
+	fx.clock.Advance(0)
+	calls := fx.executor.Calls()
+	if len(calls) != 1 || calls[0].ID != id || !calls[0].PlannedAt.Equal(want) {
+		t.Fatalf("late renewal executions = %#v, want only %s at 16:30", calls, id)
+	}
+}
+
+func TestSchedulerUpgradeDoesNotReplayRenumberedLegacyBatch(t *testing.T) {
+	cfg := task4ValidConfig("Asia/Shanghai", "09:00", "23:00", 120, 60, []string{"a", "b"})
+	cfg.WorkPeriods = []domain.LocalPeriod{{Start: "09:00", End: "12:00"}, {Start: "18:00", End: "23:00"}}
+	state := domain.RuntimeState{Occurrences: map[string]domain.OccurrenceState{}}
+	for _, account := range []struct {
+		key, at string
+		status  domain.OccurrenceStatus
+	}{
+		{"a", "16:15", domain.OccurrenceSucceeded}, {"b", "16:45", domain.OccurrencePlanned},
+	} {
+		id := "2026-09-14/p1/" + account.key
+		state.Occurrences[id] = domain.OccurrenceState{Status: account.status, PlannedOccurrence: domain.PlannedOccurrence{
+			ID: id, AccountKey: account.key, LocalDate: "2026-09-14", PeriodIndex: 1,
+			PlannedAt:   schedulerInstant("2026-09-14T" + account.at + ":00+08:00"),
+			WindowStart: schedulerInstant("2026-09-14T16:00:00+08:00"), WindowEnd: schedulerInstant("2026-09-14T17:00:00+08:00"),
+		}}
+	}
+	fx := newSchedulerFixture(t, schedulerInstant("2026-09-14T16:30:00+08:00"), state)
+	fx.scheduler = NewScheduler(fx.clock, Planner{}, fx.states, fx.executor)
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for id, at := range fx.states.saved().NextRuns {
+		if at.Before(schedulerInstant("2026-09-14T17:00:00+08:00")) {
+			t.Fatalf("upgrade scheduled duplicate or catch-up request %s at %s", id, at)
+		}
+	}
+	fx.clock.Advance(15 * time.Minute)
+	if err := fx.scheduler.Reconcile(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if calls := fx.executor.Calls(); len(calls) != 0 {
+		t.Fatalf("upgrade replayed legacy batch: %#v", calls)
+	}
+}
+
 func TestStartupMarksEveryUnexecutedPastPlanMissed(t *testing.T) {
 	now := schedulerInstant("2026-09-09T06:30:00Z")
 	state := domain.RuntimeState{Occurrences: map[string]domain.OccurrenceState{

@@ -142,6 +142,7 @@ test('simulator renders different A/B coverage with point markers and readable r
       assert.equal(result.availableB, 4);
       assert.equal(result.markers, 3, 'include the late-work renewal preheat');
       assert.deepEqual(result.preheatTimes, ['06:30', '11:30', '16:30']);
+      assert.deepEqual(result.preheatWindows, ['06:00–07:00', '11:00–12:00', '16:00–17:00']);
       assert.equal(result.hasLegend, true);
       assert.equal(result.readable, true);
       assert.equal(result.pageOverflow, false);
@@ -308,7 +309,7 @@ async function serveManagementFixture(request, response, path, state) {
         enabled: false,
         timezone: 'Asia/Shanghai',
         weekdays: [1, 2, 3, 4, 5],
-        work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '19:00' }],
+        work_periods: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }],
         preheat_lead_minutes: null,
         preheat_span_minutes: null,
         productivity_minutes: 60,

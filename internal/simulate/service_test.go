@@ -65,6 +65,23 @@ func TestSimulationExposesDistinctStrategyCoverageForTheTimeline(t *testing.T) {
 	}
 }
 
+func TestSimulationIncludesThirdPreheatWhenWorkEndsAt1800(t *testing.T) {
+	cfg := task4SimulationConfig(t)
+	cfg.WorkPeriods[1].End = "18:00"
+	cfg.ScheduledAccountKeys = []string{"acct-a"}
+	result, err := (Service{}).Run(cfg, time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, occurrence := range result.PreheatWindows {
+		got = append(got, occurrence.PlannedAt.Format("15:04"))
+	}
+	if want := []string{"06:30", "11:30", "16:30"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("overview preheats = %v, want %v", got, want)
+	}
+}
+
 func task4SimulationConfig(t *testing.T) domain.Config {
 	t.Helper()
 	lead, span := 120, 60
