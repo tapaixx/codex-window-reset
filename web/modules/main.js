@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
-import { createCodexApiCall, hostManagementRequest, normalizeCodexQuota, normalizeHostAuthFiles, request, requestErrorMessage } from './api.js';
-import { projectAccountRow, summarizeOperations } from './dashboard.js';
+import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
+import { groupHistoryBatches, projectAccountRow, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -96,6 +96,9 @@ function bootPanel() {
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
       const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
       row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('AUTH INDEX', model.authIndex, 'mono'), createCell('账号前缀', model.accountPrefix, 'mono'), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('请求结果', record.request_outcome || '--'), createCell('窗口结果', record.window_outcome || '--'), createCell('HTTP / 耗时', record.http_status ? `${record.http_status} / ${record.latency_ms || 0} ms` : '--'), createCell('快照时间', `${formatDate(snapshot.captured_at)}${quota[model.key]?.stale ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
+      const credit = quota[model.key];
+      if (credit?.reset_refresh_pending) row.children[9].textContent = '获取重置次数中…';
+      else if (credit?.reset_refresh_error) { row.children[9].textContent = '重置次数暂不可用'; row.children[9].title = credit.reset_refresh_error; }
       body.append(row);
     }
     renderSummary();
@@ -212,15 +215,19 @@ function bootPanel() {
   }
 
   function renderHistory() {
-    const body = $('#history-output'); body.replaceChildren();
+    const body = $('#history-output');
+    const expanded = new Set([...body.querySelectorAll('details[open]')].map((details) => details.dataset.batchKey));
+    body.replaceChildren();
     if (!state.history.length) { const row = document.createElement('tr'); const cell = createCell('', '暂无检测历史', 'empty-row'); cell.colSpan = 8; row.append(cell); body.append(row); return; }
-    const batches = new Map();
-    state.history.slice(0, 100).forEach((record) => { const key = record.run_id || record.occurrence_id || record.correlation_id || record.id; if (!batches.has(key)) batches.set(key, []); batches.get(key).push(record); });
-    for (const [key, records] of batches) {
-      const first = records[0]; const summary = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 8;
-      const details = document.createElement('details'); const summaryNode = document.createElement('summary'); summaryNode.textContent = `${formatDate(first.finished_at || first.started_at)} · ${triggerLabels[first.trigger] || first.trigger} · ${records.length} 个账号`;
+    for (const batch of groupHistoryBatches(state.history)) {
+      const { key, records } = batch;
+      const summary = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 8;
+      const details = document.createElement('details'); details.dataset.batchKey = key; details.open = expanded.has(key);
+      const summaryNode = document.createElement('summary');
+      const period = batch.period ? ` · 计划时段 ${Number(batch.period.split('/p')[1]) + 1}` : '';
+      summaryNode.textContent = `${triggerLabels[batch.trigger] || batch.trigger}${period} · ${batch.accountCount} 个账号 · ${records.length} 次操作 · ${formatDate(batch.startedAt)} — ${formatDate(batch.finishedAt)}`;
       const list = document.createElement('div'); list.className = 'history-batch-details';
-      records.forEach((record) => { const item = document.createElement('div'); item.className = 'history-batch-item'; item.textContent = `${record.masked_identity || record.account_key} · ${record.request_outcome || '--'} · ${record.window_outcome || '--'} · ${record.http_status || '--'} · ${formatDuration(record.latency_ms || 0)}${record.error_code ? ` · ${record.error_code}` : ''}`; list.append(item); });
+      records.forEach((record) => { const item = document.createElement('div'); item.className = 'history-batch-item'; item.textContent = `${record.masked_identity || record.account_key} · ${formatDate(record.started_at)} · ${triggerLabels[record.trigger] || record.trigger} · 请求：${record.request_outcome || '--'} · 窗口：${record.window_outcome || '--'} · HTTP ${record.http_status || '--'} · ${formatDuration(record.latency_ms || 0)}${record.error_code ? ` · ${record.error_code}` : ''}`; list.append(item); });
       details.append(summaryNode, list); cell.append(details); summary.append(cell); body.append(summary);
     }
   }
@@ -234,18 +241,25 @@ function bootPanel() {
   async function loadPanel() {
     if (state.panelLoading || state.quotaBusy) return false;
     state.panelLoading = true;
+    const quotaGeneration = state.quotaGeneration || 0;
+    const accountsGeneration = state.accountsGeneration || 0;
     try {
       $('#connection').dataset.state = 'loading'; text('#connection', '正在加载数据…');
-      const statusJob = request('/status');
-      const accountsJob = hostManagementRequest('/auth-files').then((files) => { state.accounts = normalizeHostAuthFiles(files); renderAccounts(); return files; });
+      const statusJob = request('/status').then((status) => { state.status = status; renderSummary(); });
+      const accountsJob = hostManagementRequest('/auth-files').then((files) => {
+        if ((state.accountsGeneration || 0) !== accountsGeneration) return;
+        state.accounts = normalizeHostAuthFiles(files);
+        state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
+        renderAccounts();
+      });
       const scheduleJob = request('/schedule').then((schedule) => { if (!isDraftDirty()) { applySchedule(schedule || {}); queueSimulation(); } return schedule; });
-      const quotaJob = request('/quota'); const historyJob = request('/history'); const auditJob = request('/reset-audit');
+      const quotaJob = request('/quota').then((quota) => {
+        if ((state.quotaGeneration || 0) === quotaGeneration) { state.quota = quota; renderAccounts(); }
+      });
+      const historyJob = request('/history').then((history) => { state.history = history; renderHistory(); renderAccounts(); });
+      const auditJob = request('/reset-audit').then((audit) => { state.audit = audit; renderAudit(); });
       const jobs = await Promise.allSettled([statusJob, accountsJob, scheduleJob, quotaJob, historyJob, auditJob]);
-      const value = (index, fallback) => jobs[index]?.status === 'fulfilled' ? jobs[index].value : fallback;
-      state.status = value(0, state.status); if (jobs[1].status === 'fulfilled') state.accounts = normalizeHostAuthFiles(jobs[1].value);
-      state.quota = value(3, state.quota); state.history = value(4, state.history); state.audit = value(5, state.audit); state.selected = new Set([...state.selected].filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled)));
-      if (jobs[2].status === 'fulfilled' && !isDraftDirty()) applySchedule(jobs[2].value || {});
-      renderAccounts(); renderHistory(); renderAudit(); updateDraftStatus(); queueSimulation();
+      updateDraftStatus();
       const failed = jobs.find((job) => job.status === 'rejected');
       $('#connection').dataset.state = failed ? 'error' : 'ready';
       text('#connection', failed ? `部分数据加载失败，已保留原数据。${requestErrorMessage(failed.reason)}` : '');
@@ -254,8 +268,9 @@ function bootPanel() {
   }
 
   async function withQuotaRefresh(button, action) {
-    if (state.quotaBusy || state.panelLoading) return;
+    if (state.quotaBusy) return;
     state.quotaBusy = true;
+    state.quotaGeneration = (state.quotaGeneration || 0) + 1;
     const controls = $$('[data-action="refresh-quota"], [data-action="refresh-all-quota"], [data-row-action="refresh"], [data-action="refresh-panel"]');
     const previous = controls.map((control) => [control, control.disabled]);
     controls.forEach((control) => { control.disabled = true; });
@@ -274,38 +289,23 @@ function bootPanel() {
   }
 
   async function refreshQuotaSnapshots(keys) {
-    const capturedAt = Date.now();
-    const refreshed = await Promise.allSettled(keys.map(async (key) => {
-      const account = state.accounts.find((item) => item.account_key === key);
-      if (!account?.auth_index) throw new Error('账号缺少 auth_index');
-      const result = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/usage', headers: { Accept: 'application/json' } }) });
-      const statusCode = Number(result?.status_code || result?.statusCode || 0);
-      if (statusCode < 200 || statusCode >= 300) throw new Error(`额度接口 HTTP ${statusCode || '-'}`);
-      const body = typeof result?.body === 'string' ? result.body : result?.data ?? result;
-      const usage = typeof body === 'string' ? JSON.parse(body) : body;
-      let resetPayload = null;
-      try {
-        const detail = await hostManagementRequest('/api-call', { method: 'POST', body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id, method: 'GET', url: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits', headers: { Accept: 'application/json', 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' } }) });
-        resetPayload = typeof detail?.body === 'string' ? JSON.parse(detail.body) : detail?.body ?? detail?.data ?? detail;
-      } catch { /* usage remains useful when reset detail is unavailable */ }
-      const normalized = normalizeCodexQuota(usage, { capturedAt, resetPayload });
-      if (!normalized.windows.length) throw new Error('额度接口未返回可识别窗口');
-      return { stale: false, refresh_error_code: '', snapshot: { account_key: key, captured_at: new Date(capturedAt).toISOString(), ...normalized } };
-    }));
-    const merged = quotaIndex(); let succeeded = 0;
-    refreshed.forEach((outcome, index) => {
-      const key = keys[index];
-      if (outcome.status === 'fulfilled') { merged[key] = outcome.value; succeeded++; }
-      else merged[key] = { ...merged[key], account_key: key, stale: true, refresh_error_code: requestErrorMessage(outcome.reason) };
+    const accounts = keys.map((key) => state.accounts.find((account) => account.account_key === key)).filter(Boolean);
+    text('#account-feedback', `正在刷新 ${accounts.length} 个账号；额度返回后逐项显示。`);
+    return refreshAccountQuotas(accounts, {
+      onUpdate: ({ accountKey, view, error }) => {
+        const merged = quotaIndex();
+        merged[accountKey] = error ? { ...merged[accountKey], account_key: accountKey, stale: true, refresh_error_code: requestErrorMessage(error) } : view;
+        state.quota = Object.values(merged); renderAccounts();
+      },
+      onProgress: ({ succeeded, failed, total }) => text('#account-feedback', `额度刷新 ${succeeded + failed}/${total} · 成功 ${succeeded}，失败 ${failed}`),
     });
-    state.quota = Object.values(merged); renderAccounts();
-    return { succeeded, failed: keys.length - succeeded };
   }
 
   function reportQuotaRefresh(outcome, skipped = 0) {
     const message = `额度刷新：成功 ${outcome.succeeded}，失败 ${outcome.failed}，跳过 ${skipped}。`;
-    if (outcome.failed) text('#account-feedback', `${message}失败账号保留旧快照并标记过期，请检查错误原因后重试。`);
-    else notify(message);
+    if (outcome.failed) text('#account-feedback', `${message}失败账号保留旧快照并标记过期，请检查错误原因后重试。${outcome.resetFailed ? `${outcome.resetFailed} 个账号的重置次数暂不可用。` : ''}`);
+    else if (outcome.resetFailed) text('#account-feedback', `${message}${outcome.resetFailed} 个账号的重置次数暂不可用，用量已更新。`);
+    else { text('#account-feedback', ''); notify(message); }
   }
 
   async function refreshQuota(keys, button) {
@@ -321,6 +321,7 @@ function bootPanel() {
 
   async function refreshAllQuota(button) {
     return withQuotaRefresh(button, async () => {
+      state.accountsGeneration = (state.accountsGeneration || 0) + 1;
       const files = normalizeHostAuthFiles(await hostManagementRequest('/auth-files'));
       const previous = new Set(state.selected);
       state.accounts = files;

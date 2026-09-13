@@ -158,6 +158,7 @@ test('simulator renders different A/B coverage with point markers and readable r
 
 for (const [mode, width] of [
   ['audit-refresh', 1440], ['audit-refresh-empty', 1440], ['audit-refresh-failure', 1440],
+  ['audit-refresh-progress', 1440], ['audit-background-refresh', 1440], ['audit-history-batches', 375],
   ['audit-draft', 1440], ['audit-validation', 1440], ['audit-axis', 1440],
   ['audit-accessibility', 375], ['audit-theme-dark', 1440], ['audit-navigation', 1440], ['audit-zero-gain', 1440],
 ]) {
@@ -332,11 +333,13 @@ async function serveManagementFixture(request, response, path, state) {
     return;
   }
   if (request.method === 'GET' && path.endsWith('/quota')) {
+    if (state.controls?.quotaDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.quotaDelay));
     jsonResponse(response, 200, { ok: true, result: [] });
     return;
   }
   if (request.method === 'GET' && path.endsWith('/history')) {
-    jsonResponse(response, 200, { ok: true, result: [] });
+    if (state.controls?.historyDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.historyDelay));
+    jsonResponse(response, 200, { ok: true, result: state.controls?.history || [] });
     return;
   }
   if (request.method === 'GET' && path.endsWith('/reset-audit')) {
@@ -363,6 +366,7 @@ async function serveManagementFixture(request, response, path, state) {
         const body = await requestBody(request);
         state.quotaRefreshRequests.push(body);
         const isCredits = String(body?.url || '').includes('rate-limit-reset-credits');
+        if (isCredits && state.controls?.resetDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.resetDelay));
         if (!isCredits && state.controls?.failAuthIndexes?.includes(body.auth_index)) {
           jsonResponse(response, 200, { status_code: 503, body: '{}' }); return;
         }

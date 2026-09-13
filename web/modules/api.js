@@ -95,6 +95,39 @@ export function setRequestDispatcher(dispatcher) {
   };
 }
 
+// Keep the deadline active until the response body has been consumed too.
+async function fetchJSONWithDeadline(url, init, timeoutMs) {
+  const controller = new AbortController();
+  const callerSignal = init.signal;
+  const abort = () => controller.abort(callerSignal.reason);
+  if (callerSignal?.aborted) abort();
+  else callerSignal?.addEventListener('abort', abort, { once: true });
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { ...init, signal: controller.signal });
+        let envelope;
+        try { envelope = await response.json(); }
+        catch (error) {
+          if (controller.signal.aborted) throw error;
+          envelope = { ok: false, error: { code: 'store_corrupt', message: 'Invalid response' } };
+        }
+        return { response, envelope };
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(Object.assign(new Error('请求超时，请稍后重试。'), { code: 'request_timeout' }));
+          controller.abort();
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', abort);
+  }
+}
+
 export async function request(path, options = {}) {
   const {
     base,
@@ -102,6 +135,7 @@ export async function request(path, options = {}) {
     onAuthRequired,
     body,
     method = 'GET',
+    timeoutMs = method === 'GET' ? 15000 : 150000,
     headers = {},
     ...fetchOptions
   } = options;
@@ -118,13 +152,7 @@ export async function request(path, options = {}) {
   };
   if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
 
-  const response = await fetch(`${base || deriveManagementBase()}${endpoint}`, init);
-  let envelope;
-  try {
-    envelope = await response.json();
-  } catch {
-    envelope = { ok: false, error: { code: 'store_corrupt', message: 'Invalid response' } };
-  }
+  const { response, envelope } = await fetchJSONWithDeadline(`${base || deriveManagementBase()}${endpoint}`, init, timeoutMs);
 
   if (response.status === 401 || response.status === 403) {
     const authAction = { type: 'host-auth-required', status: response.status };
@@ -149,7 +177,7 @@ export async function request(path, options = {}) {
 // derived from the resource URL.
 export async function hostManagementRequest(path, options = {}) {
   const endpoint = String(path || '').startsWith('/') ? path : `/${path}`;
-  const { body, method = 'GET', headers = {}, ...fetchOptions } = options;
+  const { body, method = 'GET', headers = {}, timeoutMs = 15000, ...fetchOptions } = options;
   const init = {
     ...fetchOptions,
     method,
@@ -157,15 +185,70 @@ export async function hostManagementRequest(path, options = {}) {
     headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...authenticatedHeaders(headers) },
   };
   if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
-  const response = await fetch(`${HOST_MANAGEMENT_BASE}${endpoint}`, init);
-  let envelope = {};
-  try { envelope = await response.json(); } catch { /* handled below */ }
+  const { response, envelope } = await fetchJSONWithDeadline(`${HOST_MANAGEMENT_BASE}${endpoint}`, init, timeoutMs);
   if (!response.ok) {
     const details = envelope?.error || {};
     const error = Object.assign(new Error(details.message || `HTTP ${response.status}`), details, { status: response.status });
     throw error;
   }
   return envelope?.result ?? envelope;
+}
+
+function quotaCallBody(result) {
+  const status = Number(result?.status_code ?? result?.statusCode ?? 0);
+  if (status < 200 || status >= 300) throw new Error(`额度接口 HTTP ${status || '-'}`);
+  const body = result?.body ?? result?.data ?? result;
+  return typeof body === 'string' ? JSON.parse(body) : body;
+}
+
+// Publish usage as soon as it arrives; optional reset details must not hide it.
+export async function refreshAccountQuotas(accounts, { onUpdate = () => {}, onProgress = () => {}, usageTimeoutMs = 15000, resetTimeoutMs = 5000 } = {}) {
+  const queue = [...new Map(accounts.filter((account) => !account.disabled).map((account) => [account.account_key, account])).values()];
+  const counts = { succeeded: 0, failed: 0, resetFailed: 0 };
+  let cursor = 0;
+  async function worker() {
+    while (cursor < queue.length) {
+      const account = queue[cursor++];
+      const accountKey = account.account_key;
+      const call = async (suffix, timeoutMs) => quotaCallBody(await hostManagementRequest('/api-call', {
+        method: 'POST', timeoutMs,
+        body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id,
+          url: `https://chatgpt.com/backend-api/wham/${suffix}`,
+          headers: { Accept: 'application/json', ...(suffix === 'usage' ? {} : { 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' }) },
+        }),
+      }));
+      let usage, capturedAt, view;
+      try {
+        if (!account.auth_index) throw new Error('账号缺少 auth_index');
+        usage = await call('usage', usageTimeoutMs);
+        capturedAt = Date.now();
+        const normalized = normalizeCodexQuota(usage, { capturedAt });
+        if (!normalized.windows.length) throw new Error('额度接口未返回可识别窗口');
+        view = { stale: false, refresh_error_code: '', reset_refresh_pending: true,
+          snapshot: { account_key: accountKey, captured_at: new Date(capturedAt).toISOString(), ...normalized } };
+      } catch (error) {
+        counts.failed++;
+        onUpdate({ accountKey, phase: 'failed', error });
+        onProgress({ ...counts, total: queue.length });
+        continue;
+      }
+      onUpdate({ accountKey, phase: 'usage', view });
+      try {
+        const resetPayload = await call('rate-limit-reset-credits', resetTimeoutMs);
+        const normalized = normalizeCodexQuota(usage, { capturedAt, resetPayload });
+        if (!normalized.reset_info_complete) throw new Error('未返回可识别的重置次数');
+        view = { ...view, snapshot: { ...view.snapshot, ...normalized } };
+      } catch (error) {
+        counts.resetFailed++;
+        view = { ...view, reset_refresh_error: requestErrorMessage(error) };
+      }
+      counts.succeeded++;
+      onUpdate({ accountKey, phase: 'complete', view: { ...view, reset_refresh_pending: false } });
+      onProgress({ ...counts, total: queue.length });
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(3, queue.length) }, () => worker()));
+  return counts;
 }
 
 export function createCodexApiCall({ authIndex, accountId = '', method = 'GET', url, headers = {}, data } = {}) {

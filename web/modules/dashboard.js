@@ -3,6 +3,22 @@ function number(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function groupHistoryBatches(history = []) {
+  const groups = new Map();
+  for (const [index, record] of history.slice(0, 100).entries()) {
+    const automatic = record.trigger === 'preheat' || record.trigger === 'compensation';
+    const occurrence = automatic && /^(\d{4}-\d{2}-\d{2}\/p\d+)\/.+$/.exec(record.occurrence_id || '');
+    const key = occurrence ? `scheduled/${occurrence[1]}` : record.run_id ? `manual/${record.run_id}` : `record/${record.id || index}`;
+    if (!groups.has(key)) groups.set(key, { key, trigger: occurrence ? 'preheat' : record.trigger, period: occurrence?.[1] || '', records: [] });
+    groups.get(key).records.push(record);
+  }
+  return [...groups.values()].map((batch) => {
+    const starts = batch.records.map((record) => record.started_at || record.finished_at).filter((date) => Number.isFinite(Date.parse(date))).sort((a, b) => Date.parse(a) - Date.parse(b));
+    const finishes = batch.records.map((record) => record.finished_at || record.started_at).filter((date) => Number.isFinite(Date.parse(date))).sort((a, b) => Date.parse(b) - Date.parse(a));
+    return { ...batch, accountCount: new Set(batch.records.map((record) => record.account_key || record.id)).size, startedAt: starts[0], finishedAt: finishes[0] };
+  }).sort((a, b) => (Date.parse(b.finishedAt) || 0) - (Date.parse(a.finishedAt) || 0));
+}
+
 function latestRecord(history, key) {
   return (Array.isArray(history) ? history : [])
     .filter((record) => record?.account_key === key)

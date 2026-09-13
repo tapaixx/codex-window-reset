@@ -50,6 +50,41 @@ async function checkUIAudit(mode) {
     assert($('[data-account-scheduled="acct-browser"]').checked && !$('[data-account-scheduled="acct-revived"]').checked, 'refresh changed scheduled membership');
     assert(/失败\s*1/.test($('#account-feedback').textContent), 'partial failure summary missing');
     assert(!$('#feedback').textContent.includes('刷新全部额度'), 'partial failure falsely announced total success');
+  } else if (mode === 'audit-refresh-progress') {
+    await configure({ resetDelay: 1500 });
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => $('#accounts-table').textContent.includes('80%'), 'usage remained hidden behind reset detail');
+    assert($('[data-action="refresh-all-quota"]').disabled, 'reset details did not remain pending');
+    assert($('#accounts-table').textContent.includes('获取重置次数中'), 'reset detail pending state missing');
+    assert($('[data-row-action="reset"]').disabled, 'reset was enabled before current reset credits arrived');
+    await waitFor(() => !$('[data-action="refresh-all-quota"]').disabled, 'refresh did not finish');
+    assert(!$('#accounts-table').textContent.includes('获取重置次数中'), 'reset pending state never cleared');
+  } else if (mode === 'audit-background-refresh') {
+    await configure({ quotaDelay: 1600, historyDelay: 1600 });
+    $('[data-action="refresh-panel"]').click();
+    await waitFor(() => $('#connection').dataset.state === 'loading', 'panel refresh did not begin');
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => $('#accounts-table').textContent.includes('80%'), 'background panel load blocked explicit quota refresh');
+    assert($('#connection').dataset.state === 'loading', 'fixture did not exercise overlapping requests');
+    await waitFor(() => $('#connection').dataset.state === 'ready', 'panel did not finish');
+    assert($('#accounts-table').textContent.includes('80%'), 'late cached quota overwrote fresh usage');
+  } else if (mode === 'audit-history-batches') {
+    await configure({ history: [
+      { id: 'a', trigger: 'preheat', occurrence_id: '2026-09-14/p0/a', account_key: 'a', masked_identity: 'a***', started_at: '2026-09-14T08:15:00+08:00' },
+      { id: 'b', trigger: 'preheat', occurrence_id: '2026-09-14/p0/b', account_key: 'b', masked_identity: 'b***', started_at: '2026-09-14T08:20:00+08:00' },
+      { id: 'c', trigger: 'compensation', occurrence_id: '2026-09-14/p0/a', account_key: 'a', masked_identity: 'a***', started_at: '2026-09-14T08:25:00+08:00' },
+      { id: 'd', trigger: 'preheat', occurrence_id: '2026-09-14/p1/a', account_key: 'a', started_at: '2026-09-14T13:20:00+08:00' },
+    ] });
+    $('[data-action="load-records"]').click();
+    await waitFor(() => document.querySelectorAll('#history-output details').length === 2, 'staggered preheats were not grouped by planned period');
+    const batch = $('#history-output [data-batch-key="scheduled/2026-09-14/p0"]');
+    assert(batch.querySelector('summary').textContent.includes('2 个账号 · 3 次操作'), 'compensation inflated unique account count');
+    batch.querySelector('summary').click();
+    assert(batch.open && batch.querySelectorAll('.history-batch-item').length === 3, 'batch cannot expand to account records');
+    $('[data-action="load-records"]').click();
+    await waitFor(() => $('#history-output [data-batch-key="scheduled/2026-09-14/p0"]') !== batch, 'history did not refresh');
+    assert($('#history-output [data-batch-key="scheduled/2026-09-14/p0"]').open, 'history refresh collapsed the inspected batch');
+    assert(document.documentElement.scrollWidth <= innerWidth, 'grouped history overflows mobile viewport');
   } else if (mode === 'audit-refresh-empty') {
     await configure({ files: [file('disabled', true)] });
     const before = (await fixtureState()).quotaRefreshRequests.length; await refresh();
