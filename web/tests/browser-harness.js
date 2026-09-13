@@ -155,6 +155,7 @@ async function checkSimulator(result) {
   if (document.querySelector('.sim-metric.gain strong')?.textContent !== '+1小时') throw new Error('metric does not match the 60-minute timeline gain');
   const markers = [...b.querySelectorAll('[data-preheat-marker]')];
   result.markers = markers.length;
+  result.preheatTimes = markers.map((node) => node.querySelector('.preheat-label')?.textContent);
   if (markers.some((node) => node.getBoundingClientRect().width > 30)) throw new Error('point marker expanded into a duration band');
   result.hasLegend = ['预计可用', '预计受限', '午休', '预热'].every((label) => document.querySelector('.timeline-legend')?.textContent.includes(label));
   result.readable = parseFloat(getComputedStyle(document.querySelector('.timeline-ruler span')).fontSize) >= 12;

@@ -16,10 +16,12 @@ export const simulationFixture = {
   preheat_windows: [
     { id: 'example/p0', period_index: 0, window_start: instant('06:00'), window_end: instant('07:00'), planned_at: instant('06:30') },
     { id: 'example/p1', period_index: 1, window_start: instant('11:00'), window_end: instant('12:00'), planned_at: instant('11:30') },
+    { id: 'example/p2', period_index: 2, window_start: instant('16:00'), window_end: instant('17:00'), planned_at: instant('16:30') },
   ],
   timeline_segments: [
     segment('preheat', '06:30', '06:30'), segment('work', '09:00', '12:00'),
     segment('preheat', '11:30', '11:30'), segment('work', '13:30', '19:00'),
+    segment('preheat', '16:30', '16:30'),
   ],
   assumptions: { productivity_minutes: 60 },
 };

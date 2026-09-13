@@ -140,7 +140,8 @@ test('simulator renders different A/B coverage with point markers and readable r
       assert.notEqual(result.trackA, result.trackB, 'A/B tracks must not reuse the same segments');
       assert.equal(result.availableA, 2);
       assert.equal(result.availableB, 4);
-      assert.equal(result.markers, 2);
+      assert.equal(result.markers, 3, 'include the late-work renewal preheat');
+      assert.deepEqual(result.preheatTimes, ['06:30', '11:30', '16:30']);
       assert.equal(result.hasLegend, true);
       assert.equal(result.readable, true);
       assert.equal(result.pageOverflow, false);

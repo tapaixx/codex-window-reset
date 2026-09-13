@@ -1,5 +1,15 @@
 # Release verification evidence
 
+## v0.0.14 发布失败修复记录
+
+2026-09-13：v0.0.13 的 CI / Release 因模拟器浏览器断言仍要求两个预热标记而失败。
+已将静态数据和断言同步为 06:30、11:30、16:30 三个时间点。
+同一失败用例分别使用源码页面、Go 实际嵌入页面及模拟 JSON 执行，均通过（每种模式包含 375px、1440px 明暗主题，0 跳过）。本地未追加全量测试；发布流水线继续执行已有门禁。
+
+详细根因、日志链接与防复发规则见 [v0.0.14 发布复盘](releases/v0.0.14.md)。
+
+## 历史验证记录
+
 This record covers the reviewed v0.0.2 implementation and the follow-up
 contract corrections verified in the working tree on 2026-09-11.
 
