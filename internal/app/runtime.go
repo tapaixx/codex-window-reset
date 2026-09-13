@@ -54,10 +54,10 @@ type Runtime struct {
 
 	// storeErrorCode is intentionally only a code.  Repository errors may
 	// contain filesystem details and must not cross the management boundary.
-	storeErrorCode domain.ErrorCode
-	accountCache   []accounts.Account
+	storeErrorCode  domain.ErrorCode
+	accountCache    []accounts.Account
 	accountCachedAt time.Time
-	accountMu      sync.Mutex
+	accountMu       sync.Mutex
 }
 
 type runState struct {
@@ -389,7 +389,9 @@ func (r *Runtime) ListAccounts(ctx context.Context) ([]accounts.Account, error) 
 	}
 	r.mu.RUnlock()
 	listed, err := r.deps.Accounts.List(ctx)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	r.mu.Lock()
 	r.accountCache = append([]accounts.Account(nil), listed...)
 	r.accountCachedAt = r.now()
@@ -474,13 +476,16 @@ func (r *Runtime) Simulate(ctx context.Context, draft domain.Config) (domain.Sim
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	known, err := r.discoveredAccountKeys(ctx)
-	if err != nil {
-		return domain.SimulationResult{}, err
+	// Simulation is a what-if preview. Avoid rediscovering host accounts for
+	// every keystroke; draft keys are only used for planner validation and no
+	// request or persistence action uses them.
+	known := make(map[string]struct{}, len(draft.ScheduledAccountKeys)+1)
+	for _, key := range draft.ScheduledAccountKeys {
+		if normalized := normalizeKey(key); normalized != "" {
+			known[normalized] = struct{}{}
+		}
 	}
-	// Simulation is a what-if preview and must remain usable before the user
-	// has selected real scheduled accounts.  Use an internal planner-only
-	// account in that case; it is never persisted or sent to the runtime.
+	// Simulation remains usable before the user has selected real accounts.
 	if len(draft.ScheduledAccountKeys) == 0 {
 		known["__simulation__"] = struct{}{}
 		draft.ScheduledAccountKeys = []string{"__simulation__"}

@@ -43,7 +43,7 @@ async function checkUIAudit(mode) {
     await refresh();
     const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
     assert(requests.some((r) => r.auth_index === 'revived') && requests.some((r) => r.auth_index === 'new'), 're-enabled/new credentials were not refreshed');
-    assert(!requests.some((r) => r.auth_index === 'disabled'), 'disabled credential was refreshed');
+    assert(requests.some((r) => r.auth_index === 'disabled'), 'disabled credential was not refreshed');
     assert($('#accounts-table [data-account-key="acct-revived"]').textContent.includes('80%'), 'successful quota lost when another account fails');
     assert($('#accounts-table [data-account-key="acct-browser"]').textContent.includes('已过期'), 'failed quota was not marked stale');
     assert($('[data-account-selection="acct-browser"]').checked, 'manual selection was lost');
@@ -88,8 +88,9 @@ async function checkUIAudit(mode) {
   } else if (mode === 'audit-refresh-empty') {
     await configure({ files: [file('disabled', true)] });
     const before = (await fixtureState()).quotaRefreshRequests.length; await refresh();
-    assert((await fixtureState()).quotaRefreshRequests.length === before, 'empty enabled set sent quota calls');
-    assert(/没有可刷新的已启用账号/.test($('#account-feedback').textContent), 'empty enabled set has misleading selection/success message');
+    const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
+    assert(requests.some((r) => r.auth_index === 'disabled'), 'disabled account was not refreshed');
+    assert(!/没有可刷新的已启用账号/.test($('#account-feedback').textContent), 'disabled account was incorrectly reported as skipped');
   } else if (mode === 'audit-refresh-failure') {
     await configure({ failAuthIndexes: ['browser'] }); await refresh();
     assert(/失败\s*1/.test($('#account-feedback').textContent), 'all-failure summary missing');

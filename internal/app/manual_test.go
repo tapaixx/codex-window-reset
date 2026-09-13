@@ -32,16 +32,35 @@ func (task7Timer) Stop() bool { return true }
 type task7AccountService struct {
 	mu       sync.Mutex
 	accounts map[string]accounts.Account
+	failList bool
 }
 
 func (s *task7AccountService) List(context.Context) ([]accounts.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failList {
+		return nil, errors.New("account discovery unavailable")
+	}
 	result := make([]accounts.Account, 0, len(s.accounts))
 	for _, account := range s.accounts {
 		result = append(result, account)
 	}
 	return result, nil
+}
+
+func TestSimulationDoesNotBlockOnAccountRediscovery(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	fx.accounts.failList = true
+	lead, span := 120, 60
+	cfg := domain.DefaultConfig()
+	cfg.Timezone = "Asia/Shanghai"
+	cfg.Weekdays = []int{1}
+	cfg.WorkPeriods = []domain.LocalPeriod{{Start: "09:00", End: "18:00"}}
+	cfg.PreheatLeadMinutes, cfg.PreheatSpanMinutes = &lead, &span
+	cfg.ScheduledAccountKeys = []string{"a"}
+	if _, err := fx.runtime.Simulate(context.Background(), cfg); err != nil {
+		t.Fatalf("simulation blocked on account discovery: %v", err)
+	}
 }
 
 func (s *task7AccountService) Find(_ context.Context, key string) (accounts.Account, error) {

@@ -61,7 +61,7 @@ function createCell(label, content, className = '') {
 }
 
 function bootPanel() {
-  const state = { status: {}, accounts: [], schedule: {}, quota: [], history: [], audit: [], selected: new Set(), scheduledKeys: new Set(), hidden: true, skipTimes: [], resetIntent: null, probeIntent: null, simulationTimer: null };
+  const state = { status: {}, accounts: [], schedule: {}, quota: [], history: [], audit: [], selected: new Set(), scheduledKeys: new Set(), hidden: true, skipTimes: [], resetIntent: null, probeIntent: null, simulationTimer: null, simulationGeneration: 0 };
   text('#simulation-output', '正在准备模拟器…');
   syncHostTheme();
 
@@ -91,7 +91,7 @@ function bootPanel() {
       const scheduled = document.createElement('label'); scheduled.className = 'switch row-switch'; const scheduledInput = document.createElement('input'); scheduledInput.type = 'checkbox'; scheduledInput.checked = state.scheduledKeys.has(model.key); scheduledInput.disabled = account.disabled; scheduledInput.dataset.accountScheduled = model.key; scheduledInput.setAttribute('aria-label', `自动预热 ${model.email}`); const scheduledTrack = document.createElement('span'); const scheduledLabel = document.createElement('em'); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; scheduledInput.addEventListener('change', () => { scheduledInput.checked ? state.scheduledKeys.add(model.key) : state.scheduledKeys.delete(model.key); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; queueSimulation(); }); scheduled.append(scheduledInput, scheduledTrack, scheduledLabel);
       const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status];
       const actions = document.createElement('div'); actions.className = 'row-actions';
-      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = account.disabled || Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh));
+      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh));
       const reset = document.createElement('button'); reset.className = 'secondary-button'; reset.type = 'button'; reset.textContent = '重置'; reset.dataset.rowAction = 'reset'; reset.disabled = !isResetQuotaEligible(account, quota[model.key]); reset.addEventListener('click', () => openReset(account, quota[model.key])); actions.append(refresh, reset);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
       const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
@@ -206,8 +206,9 @@ function bootPanel() {
   }
 
   async function runSimulation() {
+    const generation = ++state.simulationGeneration;
     if (!validateScheduleForm({ showErrors: false })) { text('#simulation-output', '请补全有效参数后查看模拟结果；错误详情可点击“保存配置”定位。'); return; }
-    const config = readSchedule(); try { const result = await request('/simulate', { method: 'POST', body: config }); renderSimulationComparison($('#simulation-output'), result, config); } catch (error) { text('#simulation-output', requestErrorMessage(error)); }
+    const config = readSchedule(); try { const result = await request('/simulate', { method: 'POST', body: config }); if (generation !== state.simulationGeneration) return; renderSimulationComparison($('#simulation-output'), result, config); } catch (error) { if (generation === state.simulationGeneration) text('#simulation-output', requestErrorMessage(error)); }
   }
   function queueSimulation() {
     updateDraftStatus();
@@ -311,10 +312,10 @@ function bootPanel() {
   async function refreshQuota(keys, button) {
     if (!keys.length) { text('#account-feedback', '请先选择账号，或使用“刷新全部额度”。'); return; }
     return withQuotaRefresh(button, async () => {
-      const enabled = keys.filter((key) => state.accounts.some((account) => account.account_key === key && !account.disabled));
-      if (!enabled.length) { text('#account-feedback', '没有可刷新的已启用账号。'); return; }
-      const outcome = await refreshQuotaSnapshots(enabled);
-      reportQuotaRefresh(outcome, keys.length - enabled.length);
+      const accounts = keys.filter((key) => state.accounts.some((account) => account.account_key === key));
+      if (!accounts.length) { text('#account-feedback', '未找到可刷新的账号。'); return; }
+      const outcome = await refreshQuotaSnapshots(accounts);
+      reportQuotaRefresh(outcome, 0);
       return outcome;
     });
   }
@@ -327,10 +328,10 @@ function bootPanel() {
       state.accounts = files;
       state.selected = new Set([...previous].filter((key) => files.some((account) => account.account_key === key && !account.disabled)));
       renderAccounts();
-      const keys = files.filter((account) => !account.disabled).map((account) => account.account_key);
-      if (!keys.length) { text('#account-feedback', `没有可刷新的已启用账号。已发现 ${files.length} 个账号，均未发送额度请求。`); return; }
+      const keys = files.map((account) => account.account_key);
+      if (!keys.length) { text('#account-feedback', '未发现可刷新的账号。'); return; }
       const outcome = await refreshQuotaSnapshots(keys);
-      reportQuotaRefresh(outcome, files.length - keys.length);
+      reportQuotaRefresh(outcome, 0);
       return outcome;
     });
   }

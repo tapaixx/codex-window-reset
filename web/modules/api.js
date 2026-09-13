@@ -203,7 +203,9 @@ function quotaCallBody(result) {
 
 // Publish usage as soon as it arrives; optional reset details must not hide it.
 export async function refreshAccountQuotas(accounts, { onUpdate = () => {}, onProgress = () => {}, usageTimeoutMs = 15000, resetTimeoutMs = 5000 } = {}) {
-  const queue = [...new Map(accounts.filter((account) => !account.disabled).map((account) => [account.account_key, account])).values()];
+  // Disabled accounts are still readable credentials. Quota refresh is a
+  // diagnostic read and must not inherit probe/reset restrictions.
+  const queue = [...new Map(accounts.map((account) => [account.account_key, account])).values()];
   const counts = { succeeded: 0, failed: 0, resetFailed: 0 };
   let cursor = 0;
   async function worker() {

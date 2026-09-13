@@ -68,6 +68,28 @@ func TestPreheatQuotaUnknownFailsOpenAndRecordsIndependentOutcomes(t *testing.T)
 	}
 }
 
+func TestPreheatDoesNotWaitIndefinitelyForQuotaRefresh(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+	fx.probes.ReleaseAll()
+	fx.quota.refreshRelease = make(chan struct{})
+	previousTimeout := preheatQuotaRefreshTimeout
+	preheatQuotaRefreshTimeout = 20 * time.Millisecond
+	defer func() { preheatQuotaRefreshTimeout = previousTimeout }()
+	done := make(chan domain.OperationRecord, 1)
+	go func() {
+		done <- fx.runtime.ExecutePreheat(context.Background(), domain.PlannedOccurrence{ID: "occ-timeout", AccountKey: "a"})
+	}()
+	select {
+	case record := <-done:
+		if record.RequestOutcome != domain.RequestSucceeded {
+			t.Fatalf("quota timeout did not fail open to preheat: %#v", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("preheat remained blocked by quota refresh")
+	}
+}
+
 func TestFallbackDecisionDoesNotAuthorizeStaleOrUntimestampedSnapshot(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	tests := []struct {

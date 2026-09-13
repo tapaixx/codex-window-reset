@@ -11,6 +11,8 @@ import (
 
 const fallbackSnapshotStaleAfter = 5 * time.Minute
 
+var preheatQuotaRefreshTimeout = 15 * time.Second
+
 // ExecutePreheat performs one scheduler-owned preheat operation.  The
 // scheduler-facing API intentionally returns a record rather than an error:
 // every attempted or skipped occurrence has one durable operation record,
@@ -88,7 +90,9 @@ func (r *Runtime) executePreheat(ctx context.Context, occurrence domain.PlannedO
 	}
 	defer r.releaseBusy(key)
 
-	before, refreshErr := r.refreshSnapshot(ctx, account)
+	quotaCtx, quotaCancel := context.WithTimeout(ctx, preheatQuotaRefreshTimeout)
+	before, refreshErr := r.refreshSnapshot(quotaCtx, account)
+	quotaCancel()
 	now := r.now()
 	decision := r.evaluateQuota(config, key, now, before, refreshErr)
 	if decision == domain.DecisionGuardrailHold || decision == domain.DecisionSufficientWindow {
@@ -114,7 +118,9 @@ func (r *Runtime) executePreheat(ctx context.Context, occurrence domain.PlannedO
 			result.ErrorCode = domain.CodeProbeFailed
 		}
 	}
-	after, _ := r.refreshSnapshot(ctx, account)
+	quotaCtx, quotaCancel = context.WithTimeout(ctx, preheatQuotaRefreshTimeout)
+	after, _ := r.refreshSnapshot(quotaCtx, account)
+	quotaCancel()
 
 	record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 	record.RequestOutcome = result.Outcome

@@ -56,7 +56,7 @@ test('unavailable reset details do not discard successfully refreshed usage', as
   assert.match(updates.at(-1).view.reset_refresh_error, /超时/);
 });
 
-test('quota requests use bounded concurrency and never probe disabled accounts', async (t) => {
+test('quota requests use bounded concurrency and include disabled accounts', async (t) => {
   let active = 0, peak = 0;
   const started = [], gates = [];
   t.mock.method(globalThis, 'fetch', async (_url, options) => {
@@ -71,6 +71,6 @@ test('quota requests use bounded concurrency and never probe disabled accounts',
   });
   const result = await api.refreshAccountQuotas([...Array.from({ length: 8 }, (_, i) => account(String(i))), { ...account('disabled'), disabled: true }]);
   assert.ok(peak <= 3, `concurrent requests: ${peak}`);
-  assert.equal(result.succeeded, 8);
-  assert.ok(!started.includes('disabled'));
+  assert.equal(result.succeeded, 9);
+  assert.ok(started.includes('disabled'));
 });
