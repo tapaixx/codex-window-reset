@@ -76,20 +76,22 @@ function simMetric(label, value, detail, tone = '') {
   return card;
 }
 
-function simStrategyCard(letter, description, metrics, workMinutes, threshold) {
+// No pass/fail badge here. The former 达标/未达标 verdict compared work-time
+// coverage against `health_threshold_percent`, a field the scheduler never
+// reads, at a default (80%) the default budget cannot reach — so it was
+// permanently red and carried no information. Coverage is stated as a number.
+function simStrategyCard(key, title, description, metrics, workMinutes) {
   const ratio = workMinutes > 0 ? Math.max(0, Math.min(100, metrics.available_coverage_minutes / workMinutes * 100)) : 0;
-  const health = workMinutes === 0 ? '未排班' : ratio >= threshold ? '达标' : '未达标';
-  const card = simElement('article', '', `strategy-card strategy-${letter.toLowerCase()}`);
+  const card = simElement('article', '', `strategy-card strategy-${key}`);
   const heading = simElement('h3');
-  heading.append(simElement('span', letter, 'strategy-letter'), document.createTextNode(`策略 ${letter} · ${description}`));
+  heading.append(document.createTextNode(title), simElement('small', description, 'strategy-sub'));
   const value = simElement('div', '', 'strategy-value');
   value.append(simElement('strong', simDuration(metrics.available_coverage_minutes)), simElement('span', '预计可用'));
   const status = simElement('div', '', 'strategy-health');
-  status.append(simElement('span', health, `coverage-status ${health === '达标' ? 'is-good' : 'is-low'}`),
-    simElement('span', `覆盖率 ${ratio.toFixed(1)}% · 阈值 ${threshold}%`));
+  status.append(simElement('span', workMinutes === 0 ? '未排班' : `覆盖工作时段 ${ratio.toFixed(1)}%`, 'coverage-status'));
   const meter = simElement('meter', '', 'coverage-meter');
   meter.min = 0; meter.max = 100; meter.value = ratio;
-  meter.setAttribute('aria-label', `策略 ${letter} 工作时段覆盖率 ${ratio.toFixed(1)}%`);
+  meter.setAttribute('aria-label', `${title} 工作时段覆盖率 ${ratio.toFixed(1)}%`);
   const detail = simElement('p', `窗口空闲 ${simDuration(metrics.idle_window_minutes)}（不计入工作覆盖）`);
   card.append(heading, value, status, meter, detail);
   return card;
@@ -148,12 +150,12 @@ function simTimeline(result, timezone, groups, config = {}) {
     boundaries.append(marker);
   }
   chart.append(boundaries);
-  for (const [letter, key, description] of [['A', 'baseline', '首次使用'], ['B', 'scheduled', '配置预热']]) {
+  for (const [letter, key, description] of [['不预热', 'baseline', '对照基准'], ['按计划预热', 'scheduled', '已配置计划']]) {
     const row = simElement('div', '', `timeline-row strategy-${letter.toLowerCase()}`);
     const label = simElement('div', '', 'timeline-row-label');
-    label.append(simElement('strong', `策略 ${letter}`), simElement('small', description));
+    label.append(simElement('strong', letter), simElement('small', description));
     const lane = simElement('div', '', 'timeline-lane');
-    lane.setAttribute('aria-label', `策略 ${letter} 的工作覆盖与预热时间`);
+    lane.setAttribute('aria-label', `${letter} 的工作覆盖与预热时间`);
     for (const segment of result[key].timeline_segments) {
       if (!simulationKinds[segment.kind] || segment.kind === 'idle') continue;
       const range = simulationRange(segment.start, segment.end, timezone, domain);
@@ -192,7 +194,7 @@ function simTimeline(result, timezone, groups, config = {}) {
   const details = simElement('details', '', 'timeline-details');
   details.append(simElement('summary', '查看分段时间明细'));
   const table = simElement('table');
-  const caption = simElement('caption', `策略 B 配置预热 · 工作覆盖明细 · ${timezone}`); table.append(caption);
+  const caption = simElement('caption', `按计划预热 · 工作覆盖明细 · ${timezone}`); table.append(caption);
   const head = simElement('thead'); const headings = simElement('tr');
   for (const text of ['时间', '状态']) { const th = simElement('th', text); th.scope = 'col'; headings.append(th); }
   head.append(headings); table.append(head);
@@ -214,16 +216,15 @@ export function renderSimulationComparison(root, result, config) {
   const timezone = config.timezone || 'Asia/Shanghai';
   const work = Number(result.work_minutes) || 0;
   const gain = Number(result.net_gain_minutes) || 0;
-  const threshold = Number(config.health_threshold_percent ?? 80);
   const metrics = simElement('div', '', 'sim-metrics');
   metrics.append(simMetric('当天总工作时长', simDuration(work), '扣除午休 / 非工作间隔', 'work'),
-    simMetric('策略 A 可用', simDuration(result.baseline?.available_coverage_minutes), '工作时段首次使用'),
-    simMetric('策略 B 可用', simDuration(result.scheduled?.available_coverage_minutes), '按已配置的预热计划', 'scheduled'),
-    simMetric('预热后增益', `${gain === 0 ? '' : gain < 0 ? '−' : '+'}${simDuration(Math.abs(gain))}`, gain === 0 ? '当前参数下无额外收益' : '策略 B 与策略 A 的差值', gain === 0 ? 'neutral' : gain < 0 ? 'loss' : 'gain'));
+    simMetric('不预热可用', simDuration(result.baseline?.available_coverage_minutes), '对照：上班后首次使用才开窗'),
+    simMetric('按计划预热可用', simDuration(result.scheduled?.available_coverage_minutes), '按已配置的预热计划', 'scheduled'),
+    simMetric('预热后增益', `${gain === 0 ? '' : gain < 0 ? '−' : '+'}${simDuration(Math.abs(gain))}`, gain === 0 ? '当前参数下无额外收益' : '按计划预热相对不预热的差值', gain === 0 ? 'neutral' : gain < 0 ? 'loss' : 'gain'));
   root.append(metrics);
   const comparison = simElement('div', '', 'strategy-compare');
-  comparison.append(simStrategyCard('A', '上班后第一次使用才开启窗口', result.baseline || {}, work, threshold),
-    simStrategyCard('B', '上班前先使用自动预热', result.scheduled || {}, work, threshold));
+  comparison.append(simStrategyCard('a', '不预热（对照）', '上班后第一次使用才开启窗口', result.baseline || {}, work),
+    simStrategyCard('b', '按计划预热', '上班前先使用自动预热', result.scheduled || {}, work));
   root.append(comparison);
   const groups = simPreheatGroups(result.preheat_windows, timezone);
   const overview = simElement('section', '', 'window-overview');
@@ -245,5 +246,5 @@ export function renderSimulationComparison(root, result, config) {
     root.append(simElement('p', '服务端未返回策略分段，请确认插件已更新。', 'simulation-empty'));
   }
   const scope = config.scheduled_account_keys?.length ? `已配置 ${config.scheduled_account_keys.length} 个自动预热账户。` : '账户集合为空：仅展示示例计划，不触发自动请求。';
-  root.append(simElement('p', `${scope} 单账户示例：策略 B 按最早有效预热起点推演；无提前预热则与 A 相同，多账户额度不叠加。单窗口预计可用 ${Number(result.assumptions?.productivity_minutes) || 0} 分钟，仅在工作时段消耗，午休不消耗；按窗口周期恢复，后续预热请求不视为强制重置。模拟不发送真实请求，也不读取当前配额。`, 'simulation-assumptions'));
+  root.append(simElement('p', `${scope} 单账户示例：按计划预热按最早有效预热起点推演；无提前预热则与对照相同，多账户额度不叠加。单窗口预计可用 ${Number(result.assumptions?.productivity_minutes) || 0} 分钟，仅在工作时段消耗，午休不消耗；按窗口周期恢复，后续预热请求不视为强制重置。模拟不发送真实请求，也不读取当前配额。`, 'simulation-assumptions'));
 }

@@ -136,9 +136,9 @@ async function checkUIAudit(mode) {
     assert($('[name="preheat_span_minutes"]').getAttribute('aria-invalid') === 'true', 'paired preheat requirement missing');
     set('preheat_span_minutes', '60'); set('probe_timeout_seconds', '1'); save();
     assert($('#schedule-form details').open && document.activeElement === $('[name="probe_timeout_seconds"]'), 'advanced invalid field stays hidden');
-    set('probe_timeout_seconds', '30'); set('health_threshold_percent', '0'); set('remaining_quota_floor_percent', '0'); set('long_window_floor_percent', '0'); save();
+    set('probe_timeout_seconds', '30'); set('remaining_quota_floor_percent', '0'); set('long_window_floor_percent', '0'); save();
     const state = await waitFor(async () => { const state = await fixtureState(); return state.scheduleRequests.length > before && state; }, 'valid config not saved');
-    assert(state.scheduleRequests.at(-1).health_threshold_percent === 0 && state.scheduleRequests.at(-1).remaining_quota_floor_percent === 0 && state.scheduleRequests.at(-1).long_window_floor_percent === 0, 'valid zero thresholds replaced by defaults');
+    assert(state.scheduleRequests.at(-1).remaining_quota_floor_percent === 0 && state.scheduleRequests.at(-1).long_window_floor_percent === 0, 'valid zero thresholds replaced by defaults');
   } else if (mode === 'audit-axis') {
     await waitFor(() => $('.timeline-lane'), 'axis not rendered');
     const ticks = [...document.querySelectorAll('.timeline-ruler span')];

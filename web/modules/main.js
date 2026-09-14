@@ -43,6 +43,24 @@ const formatDate = (value, fallback = '--') => {
 };
 const formatDuration = (milliseconds) => milliseconds >= 1000 ? `${(milliseconds / 1000).toFixed(1)} 秒` : `${milliseconds || 0} ms`;
 
+const probeOutcomeLabels = { succeeded: '成功', unauthorized: '未授权', forbidden: '被拒绝', payment_required: '需付费', rate_limited: '被限流', upstream_error: '上游错误', network_error: '网络错误', timeout: '超时', response_error: '响应异常', unexpected_output: '输出异常', credential_error: '凭据错误', disabled: '已停用' };
+const windowOutcomeLabels = { verified_started: '已开窗', already_active: '窗口已在', unchanged: '窗口未变', unverified: '未验证', not_observed: '未观察' };
+
+// One probe, one cell: the request outcome carries the colour, the window
+// outcome and HTTP/latency ride along as the detail nobody scans for.
+export function lastProbeCell(record = {}) {
+  if (!record.request_outcome) return '--';
+  const wrap = document.createElement('span'); wrap.className = 'probe-cell';
+  const pill = document.createElement('span');
+  pill.className = `probe-pill ${record.request_outcome === 'succeeded' ? 'ok' : 'bad'}`;
+  pill.textContent = probeOutcomeLabels[record.request_outcome] || record.request_outcome;
+  const detail = [windowOutcomeLabels[record.window_outcome] || record.window_outcome, record.http_status ? `HTTP ${record.http_status}` : '', record.latency_ms ? `${record.latency_ms} ms` : ''].filter(Boolean).join(' · ');
+  const note = document.createElement('small'); note.className = 'probe-detail'; note.textContent = detail || '--';
+  wrap.title = [pill.textContent, detail].filter(Boolean).join(' · ');
+  wrap.append(pill, note);
+  return wrap;
+}
+
 function createCell(label, content, className = '') {
   const cell = document.createElement('td');
   cell.dataset.label = label;
@@ -62,30 +80,82 @@ function bootPanel() {
   function renderSummary() {
     const summary = summarizeOperations({ accounts: state.accounts, quotaByAccount: quotaIndex(), scheduledKeys: state.scheduledKeys, guardrailHoldCount: state.status?.guardrail_hold_count });
     text('#summary-scheduled', summary.scheduled); text('#summary-healthy', summary.healthy); text('#summary-paused', summary.paused); text('#summary-guardrail', summary.guardrail); text('#summary-stale', summary.stale);
+    // Guardrail Hold is the only state that actually blocks preheating. At zero
+    // it is noise holding a slot; above zero it outranks everything beside it.
+    const guardrail = $('#summary-guardrail')?.closest('span');
+    if (guardrail) guardrail.dataset.state = summary.guardrail > 0 ? 'active' : 'idle';
     text('#selection-count', `已选择 ${state.selected.size} 个账号`);
+    renderFreshness();
+    renderFirstRun();
     const allSelectable = state.accounts.filter((account) => !account.disabled);
     const all = $('#select-all-checkbox');
     all.checked = allSelectable.length > 0 && allSelectable.every((account) => state.selected.has(account.account_key));
     all.indeterminate = state.selected.size > 0 && !all.checked;
   }
 
+  // The panel never polls, so an hours-old snapshot renders with exactly the
+  // authority of a live one. State the age of the oldest snapshot once, near
+  // the controls that change it, instead of leaving it to a per-row timestamp.
+  function renderFreshness() {
+    const node = $('#quota-freshness'); if (!node) return;
+    const stamps = state.quota.map((view) => Date.parse(view?.snapshot?.captured_at || '')).filter(Number.isFinite);
+    if (!stamps.length) { node.dataset.state = 'none'; node.textContent = '额度快照 · 尚未刷新'; return; }
+    const age = Math.max(0, Date.now() - Math.min(...stamps));
+    const minutes = Math.floor(age / 60000);
+    node.dataset.state = minutes >= 30 ? 'stale' : minutes >= 5 ? 'aging' : 'fresh';
+    node.textContent = `额度快照 · ${minutes < 1 ? '刚刚' : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`}`;
+    if (stamps.length < state.accounts.length) node.textContent += `（${state.accounts.length - stamps.length} 个账号尚无快照）`;
+  }
+
+  // A fresh install is inert by design, which reads as "nothing is happening".
+  // Name the three things that have to be true, and retire the whole block once
+  // the schedule is enabled.
+  function renderFirstRun() {
+    const node = $('#first-run'); if (!node) return;
+    const schedule = state.schedule || {};
+    if (schedule.enabled || state.firstRunDismissed) { node.hidden = true; return; }
+    const steps = [
+      ['配置预热提前量与时长', Number(schedule.preheat_lead_minutes) > 0 && Number(schedule.preheat_span_minutes) > 0],
+      ['勾选账号并加入预热计划', state.scheduledKeys.size > 0],
+      ['保存并启用计划', Boolean(schedule.enabled)],
+    ];
+    node.hidden = false;
+    const list = node.querySelector('.first-run-steps');
+    list.replaceChildren(...steps.map(([label, done], index) => {
+      const item = document.createElement('li');
+      item.dataset.done = String(done);
+      const mark = document.createElement('b'); mark.textContent = done ? '✓' : String(index + 1);
+      const name = document.createElement('span'); name.textContent = label;
+      item.append(mark, name);
+      return item;
+    }));
+  }
+
   function renderAccounts() {
     const body = $('#accounts-table'); body.replaceChildren();
     const quota = quotaIndex();
-    if (!state.accounts.length) { const row = document.createElement('tr'); const cell = createCell('', '未发现 Codex 账号', 'empty-row'); cell.colSpan = 16; row.append(cell); body.append(row); renderSummary(); return; }
+    if (!state.accounts.length) { const row = document.createElement('tr'); const cell = createCell('', '未发现 Codex 账号', 'empty-row'); cell.colSpan = 12; row.append(cell); body.append(row); renderSummary(); return; }
     for (const account of state.accounts) {
       const model = projectAccountRow(account, { quota: quota[account.account_key], history: state.history, hidden: state.hidden });
       const row = document.createElement('tr'); row.dataset.accountKey = model.key;
       const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = state.selected.has(model.key); checkbox.disabled = account.disabled; checkbox.dataset.accountSelection = model.key; checkbox.setAttribute('aria-label', `选择 ${model.email}`);
       checkbox.addEventListener('change', () => { checkbox.checked ? state.selected.add(model.key) : state.selected.delete(model.key); renderSummary(); });
-      const name = document.createElement('div'); name.className = 'account-name'; const strong = document.createElement('strong'); strong.textContent = model.email || account.masked_identity || '***'; const small = document.createElement('small'); small.textContent = state.hidden ? '身份已遮罩' : model.key; name.append(strong, small);
+      // Identifiers live in the account cell instead of holding two columns of
+      // their own: they are only ever read when cross-referencing during triage.
+      const name = document.createElement('div'); name.className = 'account-name'; const strong = document.createElement('strong'); strong.textContent = model.email || account.masked_identity || '***';
+      const small = document.createElement('small'); small.textContent = state.hidden ? '身份已遮罩' : model.key;
+      const ids = document.createElement('small'); ids.className = 'account-ids mono'; ids.textContent = `${model.authIndex || '--'} · ${model.accountPrefix || '--'}`; ids.title = `AUTH INDEX ${model.authIndex || '--'} · 账号前缀 ${model.accountPrefix || '--'}`;
+      name.append(strong, small, ids);
       const scheduled = document.createElement('label'); scheduled.className = 'switch row-switch'; const scheduledInput = document.createElement('input'); scheduledInput.type = 'checkbox'; scheduledInput.checked = state.scheduledKeys.has(model.key); scheduledInput.disabled = account.disabled; scheduledInput.dataset.accountScheduled = model.key; scheduledInput.setAttribute('aria-label', `自动预热 ${model.email}`); const scheduledTrack = document.createElement('span'); const scheduledLabel = document.createElement('em'); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; scheduledInput.addEventListener('change', () => { scheduledInput.checked ? state.scheduledKeys.add(model.key) : state.scheduledKeys.delete(model.key); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; queueSimulation(); }); scheduled.append(scheduledInput, scheduledTrack, scheduledLabel);
       const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status];
       const actions = document.createElement('div'); actions.className = 'row-actions';
       const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh)); actions.append(refresh);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
       const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
-      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('AUTH INDEX', model.authIndex, 'mono'), createCell('账号前缀', model.accountPrefix, 'mono'), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('请求结果', record.request_outcome || '--'), createCell('窗口结果', record.window_outcome || '--'), createCell('HTTP / 耗时', record.http_status ? `${record.http_status} / ${record.latency_ms || 0} ms` : '--'), createCell('额度更新时间', `${formatDate(snapshot.captured_at)}${(quota[model.key]?.stale || quota[model.key]?.refresh_error_code) ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
+      // One probe produces one fact. Request outcome, window outcome and the
+      // HTTP/latency pair described it across three columns; they are one cell
+      // with the detail on hover.
+      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('上次检测', lastProbeCell(record)), createCell('额度更新时间', `${formatDate(snapshot.captured_at)}${(quota[model.key]?.stale || quota[model.key]?.refresh_error_code) ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
       body.append(row);
     }
     renderSummary();
@@ -176,7 +246,7 @@ function bootPanel() {
   }
   function applySchedule(schedule) {
     state.schedule = structuredClone(schedule || {}); $('#schedule-enabled').checked = Boolean(schedule.enabled); text('#schedule-revision', schedule.revision ?? '--');
-    for (const name of ['timezone', 'window_hours', 'productivity_minutes', 'health_threshold_percent', 'preheat_lead_minutes', 'preheat_span_minutes', 'remaining_quota_floor_percent', 'remaining_window_floor_minutes', 'long_window_floor_percent', 'probe_model', 'probe_timeout_seconds']) setField(name, schedule[name] ?? '');
+    for (const name of ['timezone', 'window_hours', 'productivity_minutes', 'preheat_lead_minutes', 'preheat_span_minutes', 'remaining_quota_floor_percent', 'remaining_window_floor_minutes', 'long_window_floor_percent', 'probe_model', 'probe_timeout_seconds']) setField(name, schedule[name] ?? '');
     state.scheduledKeys = new Set(schedule.scheduled_account_keys || []);
     const periods = schedule.work_periods || [];
     setField('work_start', periods[0]?.start || '09:00'); setField('lunch_start', periods[0]?.end || '12:00');
@@ -189,7 +259,7 @@ function bootPanel() {
     const form = $('#schedule-form'); const value = (name) => form.elements[name]?.value || ''; const integer = (name, fallback = 0) => value(name) === '' ? fallback : Number(value(name)); const optionalInteger = (name) => value(name) === '' ? null : Number(value(name));
     const fixedPeriods = [{ start: value('work_start'), end: value('lunch_start') }, { start: value('lunch_end'), end: value('work_end') }];
     const workPeriods = fixedPeriods.every((period) => period.start && period.end) ? fixedPeriods : readPeriods('#work-periods');
-    return { ...state.schedule, enabled: $('#schedule-enabled').checked, timezone: value('timezone'), window_hours: integer('window_hours', 5), productivity_minutes: integer('productivity_minutes', 60), health_threshold_percent: integer('health_threshold_percent', 80), preheat_lead_minutes: optionalInteger('preheat_lead_minutes'), preheat_span_minutes: optionalInteger('preheat_span_minutes'), remaining_quota_floor_percent: integer('remaining_quota_floor_percent', 20), remaining_window_floor_minutes: integer('remaining_window_floor_minutes', 60), long_window_floor_percent: integer('long_window_floor_percent', 10), probe_model: value('probe_model'), probe_timeout_seconds: integer('probe_timeout_seconds', 30), weekdays: $$('#weekdays input:checked').map((input) => Number(input.value)), work_periods: workPeriods, blackout_periods: readPeriods('#blackout-periods'), skip_window_times: [...state.skipTimes], scheduled_account_keys: [...state.scheduledKeys] };
+    return { ...state.schedule, enabled: $('#schedule-enabled').checked, timezone: value('timezone'), window_hours: integer('window_hours', 5), productivity_minutes: integer('productivity_minutes', 60), preheat_lead_minutes: optionalInteger('preheat_lead_minutes'), preheat_span_minutes: optionalInteger('preheat_span_minutes'), remaining_quota_floor_percent: integer('remaining_quota_floor_percent', 20), remaining_window_floor_minutes: integer('remaining_window_floor_minutes', 60), long_window_floor_percent: integer('long_window_floor_percent', 10), probe_model: value('probe_model'), probe_timeout_seconds: integer('probe_timeout_seconds', 30), weekdays: $$('#weekdays input:checked').map((input) => Number(input.value)), work_periods: workPeriods, blackout_periods: readPeriods('#blackout-periods'), skip_window_times: [...state.skipTimes], scheduled_account_keys: [...state.scheduledKeys] };
   }
 
   async function runSimulation() {
@@ -252,9 +322,12 @@ function bootPanel() {
     if (state.quotaBusy) return;
     state.quotaBusy = true;
     state.quotaGeneration = (state.quotaGeneration || 0) + 1;
-    const controls = $$('[data-action="refresh-quota"], [data-action="refresh-all-quota"], [data-row-action="refresh"], [data-action="refresh-panel"]');
+    // Row buttons are destroyed and rebuilt by renderAccounts(), which derives
+    // their disabled state from state.quotaBusy; restoring them here would write
+    // to detached nodes. Only the toolbar controls survive the action.
+    const controls = $$('[data-action="refresh-quota"], [data-action="refresh-all-quota"], [data-action="refresh-panel"]');
     const previous = controls.map((control) => [control, control.disabled]);
-    controls.forEach((control) => { control.disabled = true; });
+    [...controls, ...$$('[data-row-action="refresh"]')].forEach((control) => { control.disabled = true; });
     const label = button ? [...button.childNodes] : [];
     if (button) { button.textContent = '刷新中…'; button.setAttribute('aria-busy', 'true'); }
     text('#account-feedback', ''); text('#feedback', '');
@@ -359,6 +432,7 @@ function bootPanel() {
   $('[data-action="refresh-quota"]').addEventListener('click', (event) => refreshQuota([...state.selected], event.currentTarget));
   $('[data-action="refresh-all-quota"]').addEventListener('click', (event) => refreshAllQuota(event.currentTarget));
   $('[data-action="run-probe"]').addEventListener('click', openProbe);
+  $('[data-action="dismiss-first-run"]').addEventListener('click', () => { state.firstRunDismissed = true; renderFirstRun(); });
   $('[data-action="restore-schedule"]').addEventListener('click', () => applySchedule(state.schedule));
   $('[data-action="add-work-period"]')?.addEventListener('click', () => addPeriod('#work-periods'));
   $('[data-action="add-blackout-period"]')?.addEventListener('click', () => addPeriod('#blackout-periods'));

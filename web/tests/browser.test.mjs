@@ -294,7 +294,6 @@ async function serveManagementFixture(request, response, path, state) {
         preheat_span_minutes: null,
         productivity_minutes: 60,
         window_hours: 5,
-        health_threshold_percent: 80,
         skip_window_times: [],
         remaining_quota_floor_percent: 20,
         remaining_window_floor_minutes: 60,

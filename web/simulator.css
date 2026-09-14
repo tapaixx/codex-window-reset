@@ -110,6 +110,9 @@
 .simulation-workspace .limited-band { background: repeating-linear-gradient(135deg, transparent 0 5px, rgb(255 255 255/.12) 5px 7px), var(--sim-limited); color: white; }
 .simulation-workspace .break-band { top: 0; height: 100%; background: repeating-linear-gradient(135deg, var(--sim-break) 0 4px, var(--surface-2) 4px 8px); color: var(--muted); border: 0; }
 .preheat-range { position: absolute; left: var(--start); width: var(--width); top: 6px; height: 50px; border: 1px dashed var(--sim-purple); border-radius: 4px; pointer-events: none; }
+/* Deliberately 24px wide: a 40px hit box is indistinguishable from a short
+   duration band on this lane, which is the confusion the marker exists to avoid.
+   The 76px height and the hover/focus tooltip carry the targetability instead. */
 .simulation-workspace .preheat-point { position: absolute; left: var(--at); top: -6px; transform: translateX(-50%); width: 24px; height: 76px; padding: 0; min-height: 24px; border: 0; border-radius: 0; background: transparent; z-index: 3; }
 .preheat-point::before { content: ''; position: absolute; top: 14px; bottom: 8px; left: 11px; border-left: 2px dashed var(--sim-purple); }
 .preheat-point::after { content: ''; position: absolute; left: 7px; top: 9px; width: 10px; height: 10px; border-radius: 50%; background: var(--sim-purple); border: 2px solid var(--surface); }
@@ -122,7 +125,7 @@
 .timeline-details table { width: 100%; margin-top: 8px; border-collapse: collapse; }
 .timeline-details caption { text-align: left; font-size: 12px; color: var(--muted); padding: 6px 0; }
 .timeline-details td, .timeline-details th { font-size: 12px; background: transparent; color: var(--ink); border-color: var(--line); }
-.simulation-workspace .simulation-assumptions, .simulation-empty { display: block; margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--blue-soft); color: var(--muted); font-size: 12px; line-height: 1.7; }
+.simulation-workspace .simulation-assumptions, .simulation-empty { display: block; margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--blue-soft); color: #5b6472; font-size: 12px; line-height: 1.7; }
 .simulation-empty { margin: 0; }
 .simulation-workspace .sim-metric.neutral { background: var(--surface-2); }
 .simulation-workspace .sim-metric.neutral strong { color: var(--muted); }
