@@ -24,9 +24,9 @@ test('manual refresh sends all accounts, including disabled ones, to the plugin 
     ] }) };
   });
   const result = await api.refreshAccountQuotas([account('enabled'), { ...account('disabled'), disabled: true }]);
-  assert.deepEqual(result, { succeeded: 2, failed: 0, resetFailed: 0 });
+  assert.deepEqual(result, { succeeded: 2, failed: 0 });
   assert.equal(calls.length, 1);
-  assert.match(calls[0].url, /quota\/refresh$/u);
+  assert.match(calls[0].url, /quota-refresh$/u);
   assert.deepEqual(JSON.parse(calls[0].options.body), { account_keys: ['enabled', 'disabled'] });
 });
 
@@ -37,7 +37,7 @@ test('plugin refresh errors are reported per account while preserving successful
     { stale: true, refresh_error_code: 'quota_refresh_failed', snapshot: { account_key: 'b', captured_at: '2026-09-13T12:00:00.000Z' } },
   ] }) }));
   const result = await api.refreshAccountQuotas([account('a'), account('b')], { onUpdate: (update) => updates.push(update) });
-  assert.deepEqual(result, { succeeded: 1, failed: 1, resetFailed: 0 });
+  assert.deepEqual(result, { succeeded: 1, failed: 1 });
   assert.equal(updates.length, 2);
   assert.equal(updates[0].view.snapshot.account_key, 'a');
   assert.equal(updates[1].view.refresh_error_code, 'quota_refresh_failed');

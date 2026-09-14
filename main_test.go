@@ -361,40 +361,6 @@ func TestManagementTransportFailureReturnsRetryableCorrelatedEnvelope(t *testing
 	}
 }
 
-func TestPluginLifecycleStartRecoversPendingAuditsOnlyOnce(t *testing.T) {
-	audit := &countingAudit{}
-	deps := testDependencies()
-	deps.Audit = audit
-	rt, err := app.New(deps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtimeSlot.Lock()
-	if runtimeSlot.runtime != nil {
-		runtimeSlot.runtime.Stop()
-	}
-	runtimeSlot.runtime = rt
-	runtimeSlot.Unlock()
-	t.Cleanup(func() {
-		runtimeSlot.Lock()
-		if runtimeSlot.runtime == rt {
-			rt.Stop()
-			runtimeSlot.runtime = nil
-		}
-		runtimeSlot.Unlock()
-	})
-
-	if _, err := dispatch("plugin.register", []byte(`{}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := dispatch("plugin.reconfigure", []byte(`{}`)); err != nil {
-		t.Fatal(err)
-	}
-	if got := audit.recoverCount(); got != 1 {
-		t.Fatalf("pending-audit recovery ran %d times, want once", got)
-	}
-}
-
 func TestRepeatedRuntimeInstallationStopsPreviousRuntime(t *testing.T) {
 	first := installTestRuntime(t)
 	second := installTestRuntime(t)
@@ -445,7 +411,6 @@ func testDependencies() app.Dependencies {
 		Config:   &testConfig{config: domain.DefaultConfig()},
 		History:  &testHistory{},
 		State:    &testState{},
-		Audit:    &testAudit{},
 		Clock:    testClock{now: time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)},
 		IDs:      func() string { return "test-id" },
 	}
@@ -495,9 +460,6 @@ func (*testQuota) Refresh(context.Context, accounts.Account) (domain.UsageSnapsh
 }
 func (*testQuota) Get(string, time.Time) (domain.SnapshotView, bool) {
 	return domain.SnapshotView{}, false
-}
-func (*testQuota) Reset(context.Context, accounts.Account, string) (domain.ResetHTTPResult, error) {
-	return domain.ResetHTTPResult{}, nil
 }
 
 type testConfig struct {
@@ -561,35 +523,4 @@ func cloneTestState(state domain.RuntimeState) domain.RuntimeState {
 		state.GuardrailHolds = map[string]domain.GuardrailHold{}
 	}
 	return state
-}
-
-type testAudit struct{}
-
-func (*testAudit) Load() ([]domain.ResetAudit, error) { return []domain.ResetAudit{}, nil }
-func (*testAudit) FindByKey(string) (domain.ResetAudit, bool, error) {
-	return domain.ResetAudit{}, false, nil
-}
-func (*testAudit) AppendPending(domain.ResetAudit) error { return nil }
-func (*testAudit) Replace(domain.ResetAudit) error       { return nil }
-func (*testAudit) DeleteBefore(time.Time) error          { return nil }
-func (*testAudit) RecoverPending(time.Time) error        { return nil }
-func (*testAudit) Clear() error                          { return nil }
-
-type countingAudit struct {
-	testAudit
-	mu      sync.Mutex
-	recover int
-}
-
-func (a *countingAudit) RecoverPending(time.Time) error {
-	a.mu.Lock()
-	a.recover++
-	a.mu.Unlock()
-	return nil
-}
-
-func (a *countingAudit) recoverCount() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.recover
 }

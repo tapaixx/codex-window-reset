@@ -230,10 +230,6 @@ func (q *task7Quota) Get(key string, now time.Time) (domain.SnapshotView, bool) 
 	return domain.SnapshotView{Snapshot: snapshot, LastAttemptAt: now.UTC()}, true
 }
 
-func (q *task7Quota) Reset(context.Context, accounts.Account, string) (domain.ResetHTTPResult, error) {
-	return domain.ResetHTTPResult{}, nil
-}
-
 func (q *task7Quota) MaxConcurrent() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()

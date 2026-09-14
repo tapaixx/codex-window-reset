@@ -21,11 +21,8 @@ func TestRegistrationDeclaresEveryExactRouteAndAsset(t *testing.T) {
 		"POST /plugins/codex-window-reset-linux-amd64/probes":        "",
 		"GET /plugins/codex-window-reset-linux-amd64/history":        "",
 		"DELETE /plugins/codex-window-reset-linux-amd64/history":     "",
-		"GET /plugins/codex-window-reset-linux-amd64/quota":          "",
-		"POST /plugins/codex-window-reset-linux-amd64/quota/refresh": "",
-		"POST /plugins/codex-window-reset-linux-amd64/quota/reset":   "",
-		"GET /plugins/codex-window-reset-linux-amd64/reset-audit":    "",
-		"DELETE /plugins/codex-window-reset-linux-amd64/reset-audit": "",
+		"GET /plugins/codex-window-reset-linux-amd64/quota-snapshot": "",
+		"POST /plugins/codex-window-reset-linux-amd64/quota-refresh": "",
 	})
 	assertResourcePaths(t, got.Resources, []string{
 		"/panel",
@@ -172,10 +169,5 @@ func (testRuntime) ListQuota(context.Context) ([]domain.SnapshotView, error) { r
 func (testRuntime) RefreshQuotas(context.Context, []string) ([]domain.SnapshotView, error) {
 	return nil, nil
 }
-func (testRuntime) ResetQuota(context.Context, string, string) (domain.ResetAudit, error) {
-	return domain.ResetAudit{}, nil
-}
-func (testRuntime) ListResetAudit() ([]domain.ResetAudit, error) { return nil, nil }
-func (testRuntime) ClearResetAudit(string) error                 { return nil }
 
 var _ = time.Time{}

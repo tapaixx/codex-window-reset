@@ -204,7 +204,6 @@ func newRuntime(api host.API, dataDir string) (*app.Runtime, error) {
 		Config:   store.NewConfigRepository(dataDir),
 		History:  store.NewHistoryRepository(dataDir, 100),
 		State:    state,
-		Audit:    store.NewResetAuditRepository(dataDir, 365*24*time.Hour, clock),
 		Clock:    clock,
 	})
 }

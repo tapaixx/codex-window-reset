@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"runtime"
 	"strings"
 	"sync"
@@ -20,7 +19,6 @@ import (
 const (
 	usageEndpoint        = "https://chatgpt.com/backend-api/wham/usage"
 	resetCreditsEndpoint = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
-	resetConsumeEndpoint = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 	snapshotStaleAfter   = 5 * time.Minute
 )
 
@@ -55,7 +53,6 @@ type Service struct {
 var _ interface {
 	Refresh(context.Context, accounts.Account) (domain.UsageSnapshot, error)
 	Get(string, time.Time) (domain.SnapshotView, bool)
-	Reset(context.Context, accounts.Account, string) (domain.ResetHTTPResult, error)
 	ClearSnapshots()
 	Evaluate(domain.Config, string, time.Time) domain.QuotaDecision
 } = (*Service)(nil)
@@ -211,33 +208,6 @@ func (s *Service) getJSON(ctx context.Context, account accounts.Account, endpoin
 	return response, nil
 }
 
-func (s *Service) postReset(ctx context.Context, account accounts.Account, idempotencyKey string) (host.HTTPResponse, error) {
-	body, err := json.Marshal(struct {
-		RedeemRequestID string `json:"redeem_request_id"`
-	}{RedeemRequestID: idempotencyKey})
-	if err != nil {
-		return host.HTTPResponse{}, errors.New("reset request failed")
-	}
-	material, err := accounts.AuthMaterial(ctx, s.host, account)
-	if err != nil {
-		return host.HTTPResponse{}, errors.New("credential request failed")
-	}
-	response, err := s.host.HTTPDo(ctx, host.HTTPRequest{
-		Method: "POST",
-		URL:    resetConsumeEndpoint,
-		Headers: map[string][]string{
-			"Authorization":      {"Bearer " + material.AccessToken},
-			"Chatgpt-Account-Id": {material.AccountID},
-			"Accept":             {"application/json"},
-			"Content-Type":       {"application/json"},
-			"User-Agent":         {quotaUserAgent()},
-		},
-		Body: body,
-	})
-	material = accounts.Material{}
-	return response, err
-}
-
 // Get reads only the memory cache. It never refreshes or contacts the host.
 func (s *Service) Get(key string, now time.Time) (domain.SnapshotView, bool) {
 	if s == nil {
@@ -276,40 +246,6 @@ func (s *Service) ClearSnapshots() {
 	s.mu.Lock()
 	s.entries = make(map[string]entry)
 	s.mu.Unlock()
-}
-
-// Reset is the one-shot upstream HTTP primitive. Durable idempotency and
-// audit policy belong to the application layer.
-func (s *Service) Reset(ctx context.Context, account accounts.Account, idempotencyKey string) (domain.ResetHTTPResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if s == nil || s.host == nil {
-		return domain.ResetHTTPResult{}, quotaResetError(0, "network_error", true)
-	}
-	response, err := s.postReset(ctx, account, idempotencyKey)
-	result := domain.ResetHTTPResult{StatusCode: response.StatusCode, Category: statusCategory(response.StatusCode)}
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
-			result.Category = "timeout"
-			return result, quotaResetError(response.StatusCode, result.Category, true)
-		}
-		if errors.Is(err, context.Canceled) {
-			result.Category = "network_error"
-			return result, quotaResetError(response.StatusCode, result.Category, false)
-		}
-		var timeoutErr net.Error
-		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
-			result.Category = "timeout"
-			return result, quotaResetError(response.StatusCode, result.Category, true)
-		}
-		result.Category = "network_error"
-		return result, quotaResetError(response.StatusCode, result.Category, true)
-	}
-	if !isSuccess(response.StatusCode) {
-		return result, quotaResetError(response.StatusCode, result.Category, response.StatusCode == 429 || response.StatusCode >= 500)
-	}
-	return result, nil
 }
 
 // Evaluate applies the current configurable guardrail to a cached snapshot
@@ -530,8 +466,4 @@ func statusCategory(status int) string {
 
 func quotaRefreshError() *domain.Error {
 	return &domain.Error{Code: domain.CodeQuotaRefreshFailed, Message: "quota refresh failed", Retryable: true}
-}
-
-func quotaResetError(status int, category string, retryable bool) *domain.Error {
-	return &domain.Error{Code: domain.CodeQuotaRefreshFailed, Message: "quota reset failed", Retryable: retryable, HTTPStatus: status}
 }

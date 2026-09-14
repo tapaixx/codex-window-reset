@@ -175,11 +175,8 @@ func Registration(pluginID string) RegistrationResult {
 		{Method: "POST", Path: prefix + "/probes"},
 		{Method: "GET", Path: prefix + "/history"},
 		{Method: "DELETE", Path: prefix + "/history"},
-		{Method: "GET", Path: prefix + "/quota"},
-		{Method: "POST", Path: prefix + "/quota/refresh"},
-		{Method: "POST", Path: prefix + "/quota/reset"},
-		{Method: "GET", Path: prefix + "/reset-audit"},
-		{Method: "DELETE", Path: prefix + "/reset-audit"},
+		{Method: "GET", Path: prefix + "/quota-snapshot"},
+		{Method: "POST", Path: prefix + "/quota-refresh"},
 	}
 	resources := make([]Resource, 0, len(assetPaths))
 	for index, assetPath := range assetPaths {

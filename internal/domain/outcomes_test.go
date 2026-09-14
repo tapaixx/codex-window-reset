@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -44,10 +43,6 @@ func TestJSONEnumValuesRemainStable(t *testing.T) {
 		{name: "occurrence failed", value: OccurrenceFailed, want: "failed"},
 		{name: "occurrence skipped", value: OccurrenceSkipped, want: "skipped"},
 		{name: "occurrence missed", value: OccurrenceMissed, want: "missed"},
-		{name: "reset pending", value: ResetPending, want: "pending"},
-		{name: "reset succeeded", value: ResetSucceeded, want: "succeeded"},
-		{name: "reset failed", value: ResetFailed, want: "failed"},
-		{name: "reset unknown", value: ResetUnknown, want: "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,16 +82,6 @@ func TestAccountIdentityJSONOnlyExposesSafeProjection(t *testing.T) {
 	}
 }
 
-func TestResetHTTPResultHasNoJSONExportPath(t *testing.T) {
-	encoded, err := json.Marshal(ResetHTTPResult{StatusCode: 200, Category: "success"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(encoded, []byte("{}")) {
-		t.Fatalf("reset HTTP result exported JSON fields: %s", encoded)
-	}
-}
-
 func TestJSONTimeFieldsNormalizeToUTC(t *testing.T) {
 	// This instant is intentionally represented with a non-UTC offset. Every
 	// JSON-facing domain record should expose the same UTC RFC3339 instant.
@@ -129,7 +114,6 @@ func TestJSONTimeFieldsNormalizeToUTC(t *testing.T) {
 		{name: "planned occurrence", value: planned},
 		{name: "occurrence state", value: OccurrenceState{PlannedOccurrence: planned, Status: OccurrencePlanned, CompensationDueAt: instant}},
 		{name: "runtime state", value: RuntimeState{SchemaVersion: 1, Occurrences: map[string]OccurrenceState{"occurrence": {PlannedOccurrence: planned, Status: OccurrencePlanned}}, NextRuns: map[string]time.Time{"occurrence": instant}, GuardrailHolds: map[string]GuardrailHold{"account": {AccountKey: "account", EstablishedAt: instant, FloorPercent: 10}}}},
-		{name: "reset audit", value: ResetAudit{IdempotencyKey: "idempotency", RequestedAt: instant, FinishedAt: instant, AccountKey: "account", MaskedIdentity: "a***@example.com", PriorApplicableCredits: &credits, Outcome: ResetSucceeded, CorrelationID: "correlation"}},
 		{name: "timeline segment", value: TimelineSegment{Kind: "work", Start: instant, End: instant, AccountKey: "account"}},
 		{name: "simulation result", value: SimulationResult{WorkMinutes: 1, PreheatWindows: []PlannedOccurrence{planned}, TimelineSegments: []TimelineSegment{{Kind: "work", Start: instant, End: instant}}}},
 		{name: "status view", value: StatusView{Enabled: true, NextRuns: map[string]time.Time{"occurrence": instant}, RunID: "run", RunTotal: 1, RunCompleted: 1}},

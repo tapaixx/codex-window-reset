@@ -6,7 +6,7 @@
 [插件商店](https://github.com/tapaixx/CLIProxyAPI-Plugins-Store) ·
 [构建状态](https://github.com/tapaixx/codex-window-reset/actions)
 
-Codex Window Reset 是一个面向 CLIProxyAPI 的窗口配额管理插件。它从宿主读取 Codex 账户，按固定工作窗口执行预热，提供手动健康检测与窗口额度重置，并在单页控制台中展示账户状态、24 小时时间轴和审计记录。
+Codex Window Reset 是一个面向 CLIProxyAPI 的窗口配额管理插件。它从宿主读取 Codex 账户，按固定工作窗口执行预热，提供手动健康检测，并在单页控制台中展示账户状态、剩余重置次数和 24 小时时间轴。窗口额度的实际重置操作由 CLIProxyAPI 自带的管理面板完成，本插件只负责展示。
 
 Automatic scheduling never spends Reset Credits. The panel is intentionally
 single-page and reuses CLIProxyAPI's existing authentication and persistence.
@@ -16,12 +16,12 @@ single-page and reuses CLIProxyAPI's existing authentication and persistence.
 - **固定窗口配置**：时区、工作/午休时间、工作日、预热参数、健康阈值和跳过窗口。
 - **账户集合管理**：自动预热账户可多选，也可以为空；空集合不会触发调度。
 - **服务端模拟器**：对比“首次使用”和“已配置预热”两种策略，不发送真实请求。
-- **安全操作**：手动检测需要确认额度影响；重置使用 single-flight（同一账户同一时刻只执行一个操作）与幂等键，防止同一请求重复消费。
+- **安全操作**：手动检测需要确认额度影响；批量刷新额度是只读诊断操作，不消耗 Reset Credit。
 
 ## 运行要求与安全 / Requirements and security
 
 插件不自建登录，不保存 management key，默认遮罩账户身份。账户来自
-`/v0/management/auth-files`；显式额度刷新通过插件的 `/quota/refresh` 写入内存，普通展示读取 `/quota`。
+`/v0/management/auth-files`；显式额度刷新通过插件的 `/quota-refresh` 写入内存，普通展示读取 `/quota-snapshot`。这两个路径刻意避开 CLIProxyAPI 保留给其原生按凭据配额接口的 `/plugins/:id/quota`、`/plugins/:id/quota/reset`，避免被拦截。
 
 Use a CLIProxyAPI installation that supports native plugins, with a matching
 Linux `amd64` or `arm64` host. Production Go uses only the standard library.
@@ -129,7 +129,7 @@ Short Window, but it never consumes a Reset Credit.
 
 配置与账户是两个独立概念。自动预热账户可以为空；此时配置仍可保存，
 但自动调度计划为空、不会发出请求。之后打开账户行的“自动预热”开关并
-保存，才会为该账户生成计划。手动刷新、健康检测和重置仍需在操作时
+保存，才会为该账户生成计划。手动刷新和健康检测仍需在操作时
 明确选择账户。模拟器即使没有账户也可以预览策略和时间轴。
 
 ## 操作说明 / Safe operator actions
@@ -148,22 +148,21 @@ explicit quota refresh action when current quota data is needed.
 
 ### 窗口重置 / Quota Reset
 
-重置仅能手动执行，一次一个账户。先刷新配额，确认有可用的 Reset Credit
-后再操作；确认重置会消费上游重置额度，不是普通刷新。插件记录独立审计，
-并以同账户 single-flight 和同一操作的幂等键防止并发执行与重试重复消费。
+本插件不提供消费 Reset Credit 的重置操作。面板只展示只读的“重置额度”
+（剩余可用 Reset Credit 数量），实际重置请使用 CLIProxyAPI 自带的管理
+面板执行。这是刻意的边界：Reset Credit 稀缺且不可逆，插件专注于预热
+调度与健康检测，不重复实现宿主已经提供的重置能力。
 
-Reset is manual only and accepts exactly one account. Before confirmation, the
-panel requires a successful current quota and Reset Credit refresh. Confirming
-the action calls the upstream reset-credit endpoint and consumes one applicable
-Reset Credit. Treat the Reset Credit as scarce and irreversible: it is not a
-refresh, a Probe, or an automatic scheduling action. The plugin records a
-durable Reset Audit and uses an idempotency key so a retry cannot consume the
-same credit twice.
+This plugin does not perform the credit-consuming reset action itself. The
+panel only displays a read-only applicable-credit count; use CLIProxyAPI's
+own management panel to actually reset a window. Reset Credits are scarce and
+irreversible, and this boundary avoids duplicating a capability the host
+already provides.
 
 ### 配额时效与保护暂停 / Quota freshness and holds
 
-页面不定时轮询配额；浏览器在明确刷新或重置后查询配额，运行时在检测、
-预热与重置前后更新决策快照。快照五分钟后过期。长窗口剩余配额小于或
+页面不定时轮询配额；浏览器在明确刷新后查询配额，运行时在检测与预热
+前后更新决策快照。快照五分钟后过期。长窗口剩余配额小于或
 等于下限时，会进入持久化 Guardrail Hold（保护暂停）；只有后续成功刷新
 并证明所有已识别长窗口均高于下限，才会解除。没有保护暂停且配额查询
 结果未知时，自动预热仍可能执行，并记录 `quota_unknown_fail_open`。
@@ -171,14 +170,14 @@ same credit twice.
 There is no page-open or interval quota polling. Two deliberately separate
 snapshot paths exist:
 
-- The panel calls the plugin's `POST /quota/refresh` only for an explicit quota
-  refresh and after a confirmed Reset. The plugin performs the host request,
+- The panel calls the plugin's `POST /quota-refresh` only for an explicit quota
+  refresh. The plugin performs the host request,
   stores the resulting display snapshot in process memory, and serves it from
-  `GET /quota` on subsequent panel loads; the snapshot includes its capture
+  `GET /quota-snapshot` on subsequent panel loads; the snapshot includes its capture
   time and disappears only when the plugin process restarts or history is
   explicitly cleared.
 - The plugin runtime refreshes its own decision snapshot immediately before
-  and after a Probe, Preheat Request, or Quota Reset. Runtime snapshots stay in
+  and after a Probe or Preheat Request. Runtime snapshots stay in
   memory and become stale exactly five minutes after capture.
 
 A stale runtime snapshot cannot authorize a `sufficient_window` decision.
@@ -193,10 +192,9 @@ preheating fails open and records `quota_unknown_fail_open` for auditability.
 
 ## 数据与删除边界 / Persistence and deletion boundaries
 
-插件保存配置、运行状态、最近 100 条操作记录和保留 365 天的重置审计。
-它不替 CLIProxyAPI 保存登录密钥或账户凭据。清除普通历史不会删除配置、
-运行状态和重置审计；删除审计是独立操作，必须输入 `DELETE AUDIT`。
-配置损坏会停用调度并报告 `store_corrupt`，不会静默覆盖为默认配置。
+插件保存配置、运行状态和最近 100 条操作记录。它不替 CLIProxyAPI 保存
+登录密钥或账户凭据。清除普通历史不会删除配置和运行状态。配置损坏会
+停用调度并报告 `store_corrupt`，不会静默覆盖为默认配置。
 
 When `/CLIProxyAPI/plugins` exists, the default data directory is:
 
@@ -208,10 +206,11 @@ This is deliberately a sibling of, not the same directory as,
 `/CLIProxyAPI/plugins/codex-window-reset`, which the plugin store owns as this
 plugin's own install location and may recreate on reinstall or upgrade.
 Versions through v0.0.19 stored data inside that install directory, so a
-plugin-store reinstall could silently destroy the Operator's schedule,
-runtime state, and Reset Audit history; upgrading past v0.0.19 migrates any
-files an older install left behind into the new directory automatically, once,
-on first startup.
+plugin-store reinstall could silently destroy the Operator's schedule and
+runtime state; upgrading past v0.0.19 migrates any files an older install left
+behind (including a legacy `reset-audit.json`, if the release that removed the
+Quota Reset feature has not run yet) into the new directory automatically,
+once, on first startup.
 
 In a development or other host layout without `/CLIProxyAPI/plugins`, the
 fallback is `plugins/codex-window-reset-data` relative to the process working
@@ -222,48 +221,47 @@ The directory contains:
 config.json          versioned schedule configuration and revision
 runtime-state.json   occurrence state, next runs, compensation, and holds
 history.json         the most recent 100 operational records
-reset-audit.json     Reset Audits retained for 365 days
 ```
+
+A `reset-audit.json` file may still be present from a version before the
+Quota Reset feature was removed; the plugin migrates it here on upgrade for
+historical reference, but no longer reads, writes, or exposes it through any
+management route.
 
 Writes use temporary files, synchronization, and atomic replacement. A
 corrupt configuration disables scheduling and reports `store_corrupt`; it is
 not silently replaced with defaults.
 
 Clearing ordinary history removes `history.json` records and in-memory quota
-snapshots only. It does not remove configuration, credentials owned by
-CLIProxyAPI, runtime schedule state, or Reset Audit. Clearing Reset Audit is a
-separate destructive action requiring the exact phrase `DELETE AUDIT`, and it
-also never deletes host credentials or configuration. Reset Audit records
-contain sanitized operational evidence, not access tokens, management keys,
-raw credential JSON, or full upstream bodies.
+snapshots only. It does not remove configuration or runtime schedule state.
 
 ## 升级与回滚 / Upgrade and rollback
 
 从 v0.0.19 之前的版本升级时，插件会在首次启动时自动把旧安装目录中的
-`config.json`、`runtime-state.json`、`history.json`、`reset-audit.json`
-迁移到新的数据目录，无需手动搬运；仍建议按宿主流程停用插件并备份数据目录
-后再替换对应架构的 `.so`，以应对迁移之外的异常情况。重启后核对注册版本
-和面板，手动刷新配额后再启用调度。回滚先恢复已验证的旧插件文件；只有
-持久化格式变化时才需要恢复数据备份。不要通过删除配置或审计文件来
-“重置升级”。
+`config.json`、`runtime-state.json`、`history.json`（以及可能存在的旧版
+`reset-audit.json`）迁移到新的数据目录，无需手动搬运；仍建议按宿主流程
+停用插件并备份数据目录后再替换对应架构的 `.so`，以应对迁移之外的异常
+情况。重启后核对注册版本和面板，手动刷新配额后再启用调度。回滚先恢复
+已验证的旧插件文件；只有持久化格式变化时才需要恢复数据备份。不要通过
+删除配置文件来“重置升级”。
 
 Upgrading from a version before v0.0.19 automatically migrates
-`config.json`, `runtime-state.json`, `history.json`, and `reset-audit.json`
-from the old install-directory location into the new data directory on first
-startup; manually copying files is not required. Backing up the plugin data
-directory before an upgrade is still recommended as a safeguard for anything
-outside that migration. Stop or disable the host plugin according to
-CLIProxyAPI's normal procedure, replace the matching architecture `.so`,
-restart CLIProxyAPI, confirm the panel URL and registration version, and run
-a manual quota refresh before enabling new schedule behavior. Keep
-`config.json`, `runtime-state.json`, `history.json`, and `reset-audit.json`
-unless the release notes require a migration.
+`config.json`, `runtime-state.json`, `history.json` (and a legacy
+`reset-audit.json` if one exists) from the old install-directory location
+into the new data directory on first startup; manually copying files is not
+required. Backing up the plugin data directory before an upgrade is still
+recommended as a safeguard for anything outside that migration. Stop or
+disable the host plugin according to CLIProxyAPI's normal procedure, replace
+the matching architecture `.so`, restart CLIProxyAPI, confirm the panel URL
+and registration version, and run a manual quota refresh before enabling new
+schedule behavior. Keep `config.json`, `runtime-state.json`, and
+`history.json` unless the release notes require a migration.
 
 To roll back, stop or disable the plugin, restore the previously verified
 architecture-specific `.so`, restart the host, and verify the panel and status
 before re-enabling the schedule. Restore the data-directory backup only when
 the newer binary has changed persisted formats; deleting data is not a normal
-rollback step and can destroy operational or Reset Audit evidence.
+rollback step and can destroy operational evidence.
 
 ## 验证 / Verification
 

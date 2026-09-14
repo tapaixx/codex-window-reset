@@ -21,15 +21,6 @@ export function syncHostTheme({ root = globalThis.document?.documentElement, par
   return () => { observer?.disconnect(); media?.removeEventListener?.('change', apply); };
 }
 
-const RESET_FRESHNESS_MS = 5 * 60 * 1000;
-export function isResetQuotaEligible(account = {}, quota = {}, now = Date.now()) {
-  const capturedAt = Date.parse(quota?.snapshot?.captured_at || '');
-  const current = now instanceof Date ? now.getTime() : Number(now);
-  return Boolean(!account.disabled && !account.unavailable && !quota?.refresh_error_code && !quota?.stale
-    && quota?.snapshot?.reset_info_complete && Number(quota?.snapshot?.reset_applicable_count) > 0
-    && Number.isFinite(capturedAt) && current >= capturedAt && current - capturedAt <= RESET_FRESHNESS_MS);
-}
-
 export function prepareProbeRequest({ accounts = [], selectedAccountKeys = [], unavailableAcknowledged = false } = {}) {
   const keys = [...new Set(selectedAccountKeys.map((key) => String(key || '').trim()).filter(Boolean))];
   if (!keys.length) return { ok: false, errorCode: 'selection_required', body: null };
@@ -61,7 +52,7 @@ function createCell(label, content, className = '') {
 }
 
 function bootPanel() {
-  const state = { status: {}, accounts: [], schedule: {}, quota: [], history: [], audit: [], selected: new Set(), scheduledKeys: new Set(), hidden: true, skipTimes: [], resetIntent: null, probeIntent: null, simulationTimer: null, simulationGeneration: 0 };
+  const state = { status: {}, accounts: [], schedule: {}, quota: [], history: [], selected: new Set(), scheduledKeys: new Set(), hidden: true, skipTimes: [], probeIntent: null, simulationTimer: null, simulationGeneration: 0 };
   text('#simulation-output', '正在准备模拟器…');
   syncHostTheme();
 
@@ -91,14 +82,10 @@ function bootPanel() {
       const scheduled = document.createElement('label'); scheduled.className = 'switch row-switch'; const scheduledInput = document.createElement('input'); scheduledInput.type = 'checkbox'; scheduledInput.checked = state.scheduledKeys.has(model.key); scheduledInput.disabled = account.disabled; scheduledInput.dataset.accountScheduled = model.key; scheduledInput.setAttribute('aria-label', `自动预热 ${model.email}`); const scheduledTrack = document.createElement('span'); const scheduledLabel = document.createElement('em'); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; scheduledInput.addEventListener('change', () => { scheduledInput.checked ? state.scheduledKeys.add(model.key) : state.scheduledKeys.delete(model.key); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; queueSimulation(); }); scheduled.append(scheduledInput, scheduledTrack, scheduledLabel);
       const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status];
       const actions = document.createElement('div'); actions.className = 'row-actions';
-      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh));
-      const reset = document.createElement('button'); reset.className = 'secondary-button'; reset.type = 'button'; reset.textContent = '重置'; reset.dataset.rowAction = 'reset'; reset.disabled = !isResetQuotaEligible(account, quota[model.key]); reset.addEventListener('click', () => openReset(account, quota[model.key])); actions.append(refresh, reset);
+      const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh)); actions.append(refresh);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
       const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
       row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('AUTH INDEX', model.authIndex, 'mono'), createCell('账号前缀', model.accountPrefix, 'mono'), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('请求结果', record.request_outcome || '--'), createCell('窗口结果', record.window_outcome || '--'), createCell('HTTP / 耗时', record.http_status ? `${record.http_status} / ${record.latency_ms || 0} ms` : '--'), createCell('额度更新时间', `${formatDate(snapshot.captured_at)}${(quota[model.key]?.stale || quota[model.key]?.refresh_error_code) ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
-      const credit = quota[model.key];
-      if (credit?.reset_refresh_pending) row.children[9].textContent = '获取重置次数中…';
-      else if (credit?.reset_refresh_error) { row.children[9].textContent = '重置次数暂不可用'; row.children[9].title = credit.reset_refresh_error; }
       body.append(row);
     }
     renderSummary();
@@ -233,12 +220,6 @@ function bootPanel() {
     }
   }
 
-  function renderAudit() {
-    const body = $('#reset-audit-output'); body.replaceChildren();
-    if (!state.audit.length) { const row = document.createElement('tr'); const cell = createCell('', '暂无重置审计', 'empty-row'); cell.colSpan = 6; row.append(cell); body.append(row); return; }
-    state.audit.forEach((record) => { const row = document.createElement('tr'); row.append(createCell('请求时间', formatDate(record.requested_at)), createCell('账号', record.masked_identity || record.account_key), createCell('重置前额度', record.prior_applicable_credits ?? '--'), createCell('结果', record.outcome || '--'), createCell('HTTP 分类', record.http_category || '--'), createCell('关联 ID', record.correlation_id || '--', 'mono')); body.append(row); });
-  }
-
   async function loadPanel() {
     if (state.panelLoading || state.quotaBusy) return false;
     state.panelLoading = true;
@@ -254,12 +235,11 @@ function bootPanel() {
         renderAccounts();
       });
       const scheduleJob = request('/schedule').then((schedule) => { if (!isDraftDirty()) { applySchedule(schedule || {}); queueSimulation(); } return schedule; });
-      const quotaJob = request('/quota').then((quota) => {
+      const quotaJob = request('/quota-snapshot').then((quota) => {
         if ((state.quotaGeneration || 0) === quotaGeneration) { state.quota = quota; renderAccounts(); }
       });
       const historyJob = request('/history').then((history) => { state.history = history; renderHistory(); renderAccounts(); });
-      const auditJob = request('/reset-audit').then((audit) => { state.audit = audit; renderAudit(); });
-      const jobs = await Promise.allSettled([statusJob, accountsJob, scheduleJob, quotaJob, historyJob, auditJob]);
+      const jobs = await Promise.allSettled([statusJob, accountsJob, scheduleJob, quotaJob, historyJob]);
       updateDraftStatus();
       const failed = jobs.find((job) => job.status === 'rejected');
       $('#connection').dataset.state = failed ? 'error' : 'ready';
@@ -305,8 +285,7 @@ function bootPanel() {
 
   function reportQuotaRefresh(outcome, skipped = 0) {
     const message = `额度刷新：成功 ${outcome.succeeded}，失败 ${outcome.failed}，跳过 ${skipped}。`;
-    if (outcome.failed) text('#account-feedback', `${message}失败账号保留旧快照并标记过期，请检查错误原因后重试。${outcome.resetFailed ? `${outcome.resetFailed} 个账号的重置次数暂不可用。` : ''}`);
-    else if (outcome.resetFailed) text('#account-feedback', `${message}${outcome.resetFailed} 个账号的重置次数暂不可用，用量已更新。`);
+    if (outcome.failed) text('#account-feedback', `${message}失败账号保留旧快照并标记过期，请检查错误原因后重试。`);
     else { text('#account-feedback', ''); notify(message); }
   }
 
@@ -350,14 +329,6 @@ function bootPanel() {
     try { const result = await request('/probes', { method: 'POST', body: prepared.body }); state.status = { ...state.status, ...result }; $('#probe-dialog').close(); text('#account-feedback', ''); notify(`检测任务 ${result?.run_id || ''} 已开始；完成后的配额与结果可点击刷新查看。`); } catch (error) { showError('#probe-feedback', error); } finally { button.disabled = false; }
   }
 
-  function openReset(account, quota) {
-    const prior = state.resetIntent; const idempotencyKey = prior?.accountKey === account.account_key && prior?.status !== 'completed' ? prior.idempotencyKey : crypto.randomUUID(); state.resetIntent = { accountKey: account.account_key, idempotencyKey, status: 'ready' }; text('#reset-account', state.hidden ? (account.masked_identity || '***') : (account.email || account.account_key)); text('#reset-credits', quota?.snapshot?.reset_applicable_count ?? '--'); text('#reset-feedback', ''); $('#reset-dialog').showModal();
-  }
-  async function submitReset() {
-    const intent = state.resetIntent; if (!intent || intent.status === 'submitting') return; intent.status = 'submitting'; $('#reset-confirm').disabled = true;
-    try { await request('/quota/reset', { method: 'POST', body: { account_key: intent.accountKey, idempotency_key: intent.idempotencyKey } }); intent.status = 'completed'; await refreshQuota([intent.accountKey]); state.audit = await request('/reset-audit'); renderAudit(); $('#reset-dialog').close(); notify('窗口重置完成'); } catch (error) { intent.status = 'failed'; showError('#reset-feedback', error); } finally { $('#reset-confirm').disabled = false; }
-  }
-
   $('[data-action="refresh-panel"]').addEventListener('click', () => loadPanel().then((ok) => { if (ok) notify(isDraftDirty() ? '面板已刷新，未保存的配置已保留。' : '面板已刷新'); }).catch((error) => { $('#connection').dataset.state = 'error'; text('#connection', requestErrorMessage(error)); }));
   $('[data-action="focus-settings"]').addEventListener('click', () => { $('#settings').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }); $('#settings').focus({ preventScroll: true }); });
   $('[data-action="show-help"]').addEventListener('click', () => $('#help-dialog').showModal());
@@ -390,15 +361,10 @@ function bootPanel() {
   for (const input of $$('#schedule-form input[type="number"]')) { input.step = '1'; input.required = !['preheat_lead_minutes', 'preheat_span_minutes'].includes(input.name); }
   for (const name of ['preheat_lead_minutes', 'preheat_span_minutes']) $(`[name="${name}"]`).max = '1440';
   $('[data-action="load-records"]').addEventListener('click', async () => { try { state.history = await request('/history'); renderHistory(); notify('检测历史已刷新'); } catch (error) { notify(requestErrorMessage(error)); } });
-  $('[data-action="load-audit"]').addEventListener('click', async () => { try { state.audit = await request('/reset-audit'); renderAudit(); notify('重置审计已刷新'); } catch (error) { notify(requestErrorMessage(error)); } });
-  $('[data-action="clear-audit"]').addEventListener('click', () => { $('#audit-confirmation').value = ''; text('#audit-feedback', ''); $('#clear-audit-dialog').showModal(); });
-  $$('[data-action="close-audit"]').forEach((button) => button.addEventListener('click', () => $('#clear-audit-dialog').close()));
-  $('#clear-audit-form').addEventListener('submit', async (event) => { event.preventDefault(); const confirmation = $('#audit-confirmation').value; if (confirmation !== 'DELETE AUDIT') { text('#audit-feedback', '请输入完整确认短语 DELETE AUDIT。'); return; } try { await request('/reset-audit', { method: 'DELETE', headers: { 'X-Confirmation': confirmation } }); state.audit = []; renderAudit(); $('#clear-audit-dialog').close(); notify('重置审计已清除'); } catch (error) { showError('#audit-feedback', error); } });
   $('[data-action="clear-data"]').addEventListener('click', () => $('#clear-dialog').showModal());
   $$('[data-action="close-clear"]').forEach((button) => button.addEventListener('click', () => $('#clear-dialog').close()));
   $('#clear-form').addEventListener('submit', async (event) => { event.preventDefault(); try { await request('/history', { method: 'DELETE' }); state.history = []; renderAccounts(); renderHistory(); $('#clear-dialog').close(); notify('检测历史已删除'); } catch (error) { notify(requestErrorMessage(error)); } });
   $$('[data-action="close-probe"]').forEach((button) => button.addEventListener('click', () => $('#probe-dialog').close())); $('#probe-form').addEventListener('submit', (event) => { event.preventDefault(); submitProbe($('#probe-confirm')); });
-  $$('[data-action="close-reset"]').forEach((button) => button.addEventListener('click', () => $('#reset-dialog').close())); $('#reset-form').addEventListener('submit', (event) => { event.preventDefault(); submitReset(); });
   loadPanel().catch((error) => { $('#connection').dataset.state = 'error'; text('#connection', requestErrorMessage(error)); });
 }
 

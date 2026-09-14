@@ -26,12 +26,10 @@ const (
 	integrationProbeURL      = "https://chatgpt.com/backend-api/codex/responses"
 	integrationUsageURL      = "https://chatgpt.com/backend-api/wham/usage"
 	integrationCreditsURL    = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
-	integrationConsumeURL    = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 	integrationToken         = "fake-token-never-persist"
 	integrationManagementKey = "management-secret-never-persist"
 	integrationRawEmail      = "raw@example.com"
 	integrationRawBody       = "raw-upstream-body-never-persist"
-	integrationResetKey      = "33333333-3333-4333-8333-333333333333"
 )
 
 func TestStructuredLoggerAcceptsOnlySanitizedOutcomeFields(t *testing.T) {
@@ -63,7 +61,7 @@ func TestCorruptConfigLeavesSanitizedManagementDiagnosticsReachable(t *testing.T
 	if accountsResponse.StatusCode != http.StatusOK || !strings.Contains(string(accountsResponse.Body), "acct-auth-one") {
 		t.Fatalf("account diagnostics unavailable after config corruption: %d %s", accountsResponse.StatusCode, accountsResponse.Body)
 	}
-	refreshResponse := callManagement(t, "POST", integrationPluginPath+"/quota/refresh", map[string]any{
+	refreshResponse := callManagement(t, "POST", integrationPluginPath+"/quota-refresh", map[string]any{
 		"account_keys": []string{"acct-auth-one"},
 	}, map[string][]string{"Content-Type": {"application/json"}})
 	if refreshResponse.StatusCode != http.StatusOK || !strings.Contains(string(refreshResponse.Body), "acct-auth-one") {
@@ -78,8 +76,6 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 		auth: map[string]json.RawMessage{
 			"auth-one": json.RawMessage(fmt.Sprintf(`{"access_token":%q,"account_id":"upstream-one","email":%q}`, integrationToken, integrationRawEmail)),
 		},
-		consumeEntered: make(chan struct{}),
-		releaseConsume: make(chan struct{}),
 	}
 	rt, err := newRuntime(fake, dir)
 	if err != nil {
@@ -168,41 +164,15 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 	}
 	waitForHistory(t, rt, 1)
 
-	refreshResponse := callManagement(t, "POST", integrationPluginPath+"/quota/refresh", map[string]any{
+	refreshResponse := callManagement(t, "POST", integrationPluginPath+"/quota-refresh", map[string]any{
 		"account_keys": []string{"acct-auth-one"},
 	}, map[string][]string{"Content-Type": {"application/json"}})
 	if refreshResponse.StatusCode != http.StatusOK || !strings.Contains(string(refreshResponse.Body), "acct-auth-one") {
 		t.Fatalf("quota refresh failed: %d %s", refreshResponse.StatusCode, refreshResponse.Body)
 	}
-
-	resetDone := make(chan abiManagementResponse, 1)
-	go func() {
-		resetDone <- callManagement(t, "POST", integrationPluginPath+"/quota/reset", map[string]any{
-			"account_key":     "acct-auth-one",
-			"idempotency_key": integrationResetKey,
-		}, map[string][]string{"Content-Type": {"application/json"}})
-	}()
-	select {
-	case <-fake.consumeEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("reset did not reach consume")
-	}
-	pending := callManagement(t, "GET", integrationPluginPath+"/reset-audit", nil, nil)
-	if pending.StatusCode != http.StatusOK || !strings.Contains(string(pending.Body), `"outcome":"pending"`) {
-		t.Fatalf("pending reset audit was not visible: %d %s", pending.StatusCode, pending.Body)
-	}
-	close(fake.releaseConsume)
-	resetResponse := <-resetDone
-	if resetResponse.StatusCode != http.StatusOK || !strings.Contains(string(resetResponse.Body), `"outcome":"succeeded"`) {
-		t.Fatalf("final reset response = %d %s", resetResponse.StatusCode, resetResponse.Body)
-	}
-	resetCalls := fake.consumeCalls()
-	replay := callManagement(t, "POST", integrationPluginPath+"/quota/reset", map[string]any{
-		"account_key":     "acct-auth-one",
-		"idempotency_key": integrationResetKey,
-	}, map[string][]string{"Content-Type": {"application/json"}})
-	if replay.StatusCode != http.StatusOK || fake.consumeCalls() != resetCalls {
-		t.Fatalf("idempotent replay repeated consume: %d %s calls=%d/%d", replay.StatusCode, replay.Body, fake.consumeCalls(), resetCalls)
+	snapshot := callManagement(t, "GET", integrationPluginPath+"/quota-snapshot", nil, nil)
+	if snapshot.StatusCode != http.StatusOK || !strings.Contains(string(snapshot.Body), "acct-auth-one") {
+		t.Fatalf("quota snapshot unavailable: %d %s", snapshot.StatusCode, snapshot.Body)
 	}
 
 	clearHistory := callManagement(t, "DELETE", integrationPluginPath+"/history", nil, nil)
@@ -221,10 +191,6 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 	if scheduleAfterHistory.StatusCode != http.StatusOK || !scheduleAfterHistoryEnvelope.Result.Enabled || scheduleAfterHistoryEnvelope.Result.Revision != updatedEnvelope.Result.Revision {
 		t.Fatalf("ordinary history clear changed configuration: %d %s", scheduleAfterHistory.StatusCode, scheduleAfterHistory.Body)
 	}
-	auditAfterHistory := callManagement(t, "GET", integrationPluginPath+"/reset-audit", nil, nil)
-	if !strings.Contains(string(auditAfterHistory.Body), integrationResetKey) {
-		t.Fatalf("ordinary history clear deleted reset audit: %s", auditAfterHistory.Body)
-	}
 	authCallsBeforeHistoryProbe := fake.authCalls()
 	probeAfterHistory := callManagement(t, "POST", integrationPluginPath+"/probes", map[string]any{
 		"account_keys":             []string{"acct-auth-one"},
@@ -239,11 +205,6 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 		t.Fatalf("history clear crossed host credential boundary: records=%#v auth_calls=%d/%d err=%v", remainingHistory, fake.authCalls(), authCallsBeforeHistoryProbe, err)
 	}
 
-	clearAudit := callManagement(t, "DELETE", integrationPluginPath+"/reset-audit", nil, map[string][]string{"X-Confirmation": {"DELETE AUDIT"}})
-	if clearAudit.StatusCode != http.StatusOK {
-		t.Fatalf("audit clear status = %d: %s", clearAudit.StatusCode, clearAudit.Body)
-	}
-
 	asset := callManagement(t, "GET", integrationResourcePath+"/panel", nil, nil)
 	if asset.StatusCode != http.StatusOK || asset.Headers["Content-Type"][0] != "text/html; charset=utf-8" || !strings.Contains(string(asset.Body), "<style>") || !strings.Contains(string(asset.Body), "<script>") {
 		t.Fatalf("embedded asset response = %#v", asset)
@@ -256,9 +217,8 @@ func TestManagementDispatchEndToEndPreservesLifecycleAndSecretBoundaries(t *test
 	}
 
 	assertIntegrationSecretsAbsent(t, dir, fake, status.Body, accountsResponse.Body, scheduleResponse.Body, updated.Body,
-		conflict.Body, probeResponse.Body, refreshResponse.Body, pending.Body, resetResponse.Body, replay.Body, history.Body,
-		scheduleAfterHistory.Body, probeAfterHistory.Body,
-		auditAfterHistory.Body, clearAudit.Body)
+		conflict.Body, probeResponse.Body, refreshResponse.Body, snapshot.Body, history.Body,
+		scheduleAfterHistory.Body, probeAfterHistory.Body)
 }
 
 func installRuntimeForIntegrationTest(t *testing.T, rt *app.Runtime) {
@@ -379,16 +339,12 @@ func assertIntegrationSecretsAbsent(t *testing.T, dir string, fake *integrationH
 }
 
 type integrationHost struct {
-	mu             sync.Mutex
-	files          []host.AuthFile
-	auth           map[string]json.RawMessage
-	requests       []host.HTTPRequest
-	logs           []string
-	consumeEntered chan struct{}
-	releaseConsume chan struct{}
-	consumeCount   int
-	authCount      int
-	consumeOnce    sync.Once
+	mu        sync.Mutex
+	files     []host.AuthFile
+	auth      map[string]json.RawMessage
+	requests  []host.HTTPRequest
+	logs      []string
+	authCount int
 }
 
 type fieldBoundaryLogger struct {
@@ -433,7 +389,7 @@ func (h *integrationHost) GetAuth(_ context.Context, authIndex string) (json.Raw
 	return append(json.RawMessage(nil), raw...), nil
 }
 
-func (h *integrationHost) HTTPDo(ctx context.Context, request host.HTTPRequest) (host.HTTPResponse, error) {
+func (h *integrationHost) HTTPDo(_ context.Context, request host.HTTPRequest) (host.HTTPResponse, error) {
 	h.mu.Lock()
 	h.requests = append(h.requests, cloneIntegrationRequest(request))
 	h.mu.Unlock()
@@ -448,23 +404,6 @@ func (h *integrationHost) HTTPDo(ctx context.Context, request host.HTTPRequest) 
 		return host.HTTPResponse{StatusCode: http.StatusOK, Body: integrationUsageFixture()}, nil
 	case integrationCreditsURL:
 		return host.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"available_count":2,"applicable_available_count":2,"credits":[{"id":"credit","reset_type":"codex_rate_limits","status":"available","expires_at":"2026-09-16T00:00:00Z"}]}`)}, nil
-	case integrationConsumeURL:
-		h.consumeOnce.Do(func() {
-			if h.consumeEntered != nil {
-				close(h.consumeEntered)
-			}
-		})
-		if h.releaseConsume != nil {
-			select {
-			case <-h.releaseConsume:
-			case <-ctx.Done():
-				return host.HTTPResponse{}, ctx.Err()
-			}
-		}
-		h.mu.Lock()
-		h.consumeCount++
-		h.mu.Unlock()
-		return host.HTTPResponse{StatusCode: http.StatusOK, Body: []byte(`{"ok":true}`)}, nil
 	default:
 		return host.HTTPResponse{StatusCode: http.StatusNotFound, Body: []byte(integrationRawBody)}, nil
 	}
@@ -475,12 +414,6 @@ func (h *integrationHost) Log(_ context.Context, level, message string, fields m
 	h.mu.Lock()
 	h.logs = append(h.logs, string(data))
 	h.mu.Unlock()
-}
-
-func (h *integrationHost) consumeCalls() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.consumeCount
 }
 
 func (h *integrationHost) authCalls() int {

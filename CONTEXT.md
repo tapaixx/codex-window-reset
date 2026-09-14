@@ -16,12 +16,8 @@ _Avoid_: Session, billing cycle
 A Probe Request made by the scheduler with the intent of beginning a Usage Window before expected interactive work. It consumes ordinary quota and does not consume a Reset Credit.
 _Avoid_: Reset, forced reset, keepalive
 
-**Quota Reset**:
-An explicit, user-authorized operation that consumes a Reset Credit to restore upstream quota. It is never an automatic scheduling action.
-_Avoid_: Preheat, refresh, restart
-
 **Reset Credit**:
-A limited upstream entitlement consumed by one Quota Reset.
+A limited upstream entitlement that restores a Usage Window when consumed. Codex Window Reset only displays the remaining applicable count; the Operator consumes one through CLIProxyAPI's own management panel, never through this plugin.
 _Avoid_: Quota, token balance
 
 **Health Probe**:
@@ -87,10 +83,6 @@ _Avoid_: Failed request, compensation attempt
 **Paused Account**:
 A Scheduled Account temporarily prevented from receiving automatic Preheat Requests because it is unavailable or unhealthy, without removing the Operator's selection. An unavailable account may still receive an explicitly authorized Health Probe; a disabled account may not.
 _Avoid_: Excluded account, removed account
-
-**Reset Audit**:
-A durable record that an Operator requested a Quota Reset and whether the upstream operation succeeded.
-_Avoid_: Detection history, application log
 
 **Work Calendar**:
 The effective weekdays, timezone, and ordered Critical Work Periods that constrain a Preheat Schedule.

@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../modules/state.js';
 import { serializeScheduleDraft, validateScheduleDraft } from '../modules/schedule.js';
-import { isResetQuotaEligible } from '../modules/main.js';
 import {
   accountStatusValue,
   bindAccountRevealControl,
@@ -63,30 +62,7 @@ test('schedule validation allows an enabled schedule with no selected accounts',
   assert.deepEqual(errors, []);
 });
 
-test('reset eligibility requires a successful snapshot no older than five minutes', () => {
-  const account = { account_key: 'acct-a', unavailable: false, disabled: false };
-  const base = {
-    stale: false,
-    snapshot: { captured_at: new Date(capturedAt - 4 * 60 * 1000).toISOString(), reset_info_complete: true, reset_applicable_count: 1 },
-  };
-
-  assert.equal(isResetQuotaEligible(account, base, capturedAt), true);
-  assert.equal(isResetQuotaEligible(account, null, capturedAt), false);
-  assert.equal(isResetQuotaEligible(account, { ...base, refresh_error_code: 'quota_refresh_failed' }, capturedAt), false);
-  assert.equal(isResetQuotaEligible(account, { ...base, stale: true }, capturedAt), false);
-  assert.equal(
-    isResetQuotaEligible(account, { ...base, snapshot: { ...base.snapshot, captured_at: new Date(capturedAt - 5 * 60 * 1000 - 1).toISOString() } }, capturedAt),
-    false,
-  );
-  assert.equal(
-    isResetQuotaEligible(account, { ...base, snapshot: { ...base.snapshot, captured_at: new Date(capturedAt + 1).toISOString() } }, capturedAt),
-    false,
-  );
-  assert.equal(isResetQuotaEligible({ ...account, unavailable: true }, base, capturedAt), false);
-  assert.equal(isResetQuotaEligible(account, { ...base, snapshot: { ...base.snapshot, reset_applicable_count: 0 } }, capturedAt), false);
-});
-
-test('failed quota refresh marks the preserved snapshot ineligible', () => {
+test('failed quota refresh marks the preserved snapshot with an error code', () => {
   const store = createStore({ quota: [{ snapshot: { account_key: 'acct-a', reset_info_complete: true } }] });
   store.dispatch({ type: 'quota-refresh-failed', keys: ['acct-a'], error: 'quota_refresh_failed' });
   assert.equal(store.getState().quotaByAccount['acct-a'].refresh_error_code, 'quota_refresh_failed');
@@ -124,14 +100,13 @@ test('refreshed run status is merged into the current run', () => {
   });
 });
 
-test('unavailable accounts are explicit and never reset-eligible', () => {
+test('unavailable accounts are explicit and never reported healthy', () => {
   const quota = {
     stale: false,
     snapshot: { captured_at: new Date(capturedAt - 60 * 1000).toISOString(), reset_info_complete: true },
   };
   assert.equal(accountStatusValue({ unavailable: true }, quota)[0], 'Unavailable');
   assert.notEqual(accountStatusValue({ unavailable: true }, quota)[0], 'Healthy');
-  assert.equal(isResetQuotaEligible({ account_key: 'acct-a', unavailable: true }, quota, capturedAt), false);
 });
 
 test('latest history selection uses the newest matching record', () => {

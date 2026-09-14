@@ -6,19 +6,17 @@ import "errors"
 type ErrorCode string
 
 const (
-	CodeConfigInvalid       ErrorCode = "config_invalid"
-	CodeRevisionConflict    ErrorCode = "revision_conflict"
-	CodeRunInProgress       ErrorCode = "run_in_progress"
-	CodeAccountBusy         ErrorCode = "account_busy"
-	CodeAccountDisabled     ErrorCode = "account_disabled"
-	CodeAccountUnavailable  ErrorCode = "account_unavailable"
-	CodeGuardrailHold       ErrorCode = "guardrail_hold"
-	CodeQuotaRefreshFailed  ErrorCode = "quota_refresh_failed"
-	CodeProbeFailed         ErrorCode = "probe_failed"
-	CodeWindowUnverified    ErrorCode = "window_unverified"
-	CodeIdempotencyConflict ErrorCode = "idempotency_conflict"
-	CodeResetOutcomeUnknown ErrorCode = "reset_outcome_unknown"
-	CodeStoreCorrupt        ErrorCode = "store_corrupt"
+	CodeConfigInvalid      ErrorCode = "config_invalid"
+	CodeRevisionConflict   ErrorCode = "revision_conflict"
+	CodeRunInProgress      ErrorCode = "run_in_progress"
+	CodeAccountBusy        ErrorCode = "account_busy"
+	CodeAccountDisabled    ErrorCode = "account_disabled"
+	CodeAccountUnavailable ErrorCode = "account_unavailable"
+	CodeGuardrailHold      ErrorCode = "guardrail_hold"
+	CodeQuotaRefreshFailed ErrorCode = "quota_refresh_failed"
+	CodeProbeFailed        ErrorCode = "probe_failed"
+	CodeWindowUnverified   ErrorCode = "window_unverified"
+	CodeStoreCorrupt       ErrorCode = "store_corrupt"
 )
 
 // Error is a sanitized, transport-independent domain error. Callers may map

@@ -1,0 +1,7 @@
+# Remove self-service Quota Reset and rename colliding quota routes
+
+CLIProxyAPI reserves `GET/POST/DELETE /plugins/:id/quota` and `POST /plugins/:id/quota/reset` for its own native per-credential Quota Provider SDK, ahead of any plugin's own generic route table. Codex Window Reset had registered its own `GET /quota` and `POST /quota/reset` at those exact paths, so both were silently intercepted by CLIProxyAPI before ever reaching the plugin; the read-only quota display returned the host's native `auth_index is required` error, and the audited Quota Reset flow never executed at all. The Operator's host already exposes a working reset action for Reset Credits through its own management panel.
+
+Codex Window Reset therefore drops self-service Quota Reset entirely rather than reimplementing it against CLIProxyAPI's per-credential Quota Provider contract, which would trade this plugin's batched cache reads and audited, idempotent confirmation flow for a per-account fetch model and a route any caller (not just this panel) could trigger. The panel keeps displaying the read-only applicable Reset Credit count; the Operator performs the actual reset through CLIProxyAPI's panel. The surviving read/refresh routes are renamed to `/quota-snapshot` and `/quota-refresh`, which do not collide with any CLIProxyAPI-reserved path and are immune to future additions under `/plugins/:id/quota/*`.
+
+This supersedes ADR-0002 and ADR-0019.

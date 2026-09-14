@@ -1,5 +1,45 @@
 # Release verification evidence
 
+## GET /quota 与 POST /quota/reset 被 CLIProxyAPI 原生路由拦截（当前修复）
+
+2026-09-14：用户反馈额度快照刷新一直不生效，面板报 `GET .../quota` 400
+`{"error":"auth_index is required"}`。用请求方提供的真实管理密钥直连部署这台
+机器上的 `cli-proxy-api`（`eceasy/cli-proxy-api` / 开源仓库
+`router-for-me/CLIProxyAPI` v7.3.2）容器排查，并克隆该仓库源码核对，定位到
+`internal/api/server_management.go`：
+
+```go
+mgmt.GET("/plugins/:id/quota", s.mgmt.GetPluginQuota)
+mgmt.POST("/plugins/:id/quota", s.mgmt.FetchPluginQuota)
+mgmt.DELETE("/plugins/:id/quota", s.mgmt.ResetPluginQuota)
+mgmt.POST("/plugins/:id/quota/reset", s.mgmt.ResetPluginQuota)
+```
+
+`/plugins/:id/quota` 和 `/plugins/:id/quota/reset` 是 CLIProxyAPI 保留给自己
+原生 Quota Provider SDK（按 `auth_index` 查/重置单个凭据配额）的路径，Gin
+路由器对静态字面量路径的匹配优先级高于插件的通用转发兜底路由。本插件恰好
+把批量额度展示和窗口重置注册在同名路径上，导致这两个请求从未真正到达插件
+代码，被宿主原生 handler 接住，读不到 `auth_index` 就报 400。已用无效 key、
+真实 key 分别对比 cpa-plus 外壳与 cli-proxy-api 本体的错误响应格式确认。
+
+修复（配合 ADR-0021）：
+- `GET /quota` 改名为 `GET /quota-snapshot`，`POST /quota/refresh` 改名为
+  `POST /quota-refresh`（原本不撞车，一并改名避免以后 CLIProxyAPI 在
+  `/plugins/:id/quota/*` 下新增保留路径又撞上）。
+- `POST /quota/reset` 直接下线，插件不再自己执行消费 Reset Credit 的重置——
+  该能力宿主自带的管理面板已经有，且如果改用 CLIProxyAPI 的 Quota Provider
+  SDK 去接，会把重置动作暴露成任何调用方都能触发、绕开本插件确认弹窗和
+  幂等键保护的全局入口，权衡后放弃。面板保留"重置额度"这一列的只读展示
+  （来自批量刷新返回的 `reset_applicable_count`），去掉执行按钮。
+- 连带移除了因此变成死代码的 Reset Audit 整套基础设施（`internal/app/reset.go`、
+  `internal/store/reset_audit.go`、`GET/DELETE /reset-audit`、面板的 Reset
+  Audit 标签页和 `DELETE AUDIT` 清除流程）——它唯一的用途就是记录插件自己
+  执行重置的结果，重置动作本身没了，这些代码永远不会再被触发。
+
+回归证据：Go 侧全部测试（含 `-race`）、Node 侧 69 个测试全部通过；用同样的
+手法（先改回旧路径名/旧行为确认相关测试会失败，再验证修复后通过）逐项验证
+了改名和移除没有让测试形同虚设。
+
 ## 数据目录与插件自身安装目录共用导致重装丢配置（当前修复）
 
 2026-09-13：用户报告重装插件会导致配置全部丢失。根因是 `defaultDataDir()` 把

@@ -26,7 +26,6 @@ type Dependencies struct {
 	Config   ConfigRepository
 	History  HistoryRepository
 	State    RuntimeStateRepository
-	Audit    ResetAuditRepository
 	Planner  Planner
 	Clock    domain.Clock
 	IDs      func() string
@@ -35,22 +34,20 @@ type Dependencies struct {
 // Runtime is the sole owner of mutable application orchestration state.  In
 // particular, the busy registry and bulk run state are never package globals.
 type Runtime struct {
-	mu           sync.RWMutex
-	configMu     sync.Mutex
-	deps         Dependencies
-	config       domain.Config
-	run          *runState
-	busy         map[string]struct{}
-	resetFlights map[string]*resetFlight
-	stop         chan struct{}
-	stopCtx      context.Context
-	stopCancel   context.CancelFunc
-	resetGate    sync.RWMutex
-	wg           sync.WaitGroup
-	stopOnce     sync.Once
-	started      bool
-	stopped      bool
-	scheduler    *schedule.Scheduler
+	mu         sync.RWMutex
+	configMu   sync.Mutex
+	deps       Dependencies
+	config     domain.Config
+	run        *runState
+	busy       map[string]struct{}
+	stop       chan struct{}
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	wg         sync.WaitGroup
+	stopOnce   sync.Once
+	started    bool
+	stopped    bool
+	scheduler  *schedule.Scheduler
 
 	// storeErrorCode is intentionally only a code.  Repository errors may
 	// contain filesystem details and must not cross the management boundary.
@@ -123,13 +120,12 @@ func New(deps Dependencies) (*Runtime, error) {
 	config, err := deps.Config.Load()
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	runtime := &Runtime{
-		deps:         deps,
-		config:       cloneConfig(config),
-		busy:         make(map[string]struct{}),
-		resetFlights: make(map[string]*resetFlight),
-		stop:         make(chan struct{}),
-		stopCtx:      stopCtx,
-		stopCancel:   stopCancel,
+		deps:       deps,
+		config:     cloneConfig(config),
+		busy:       make(map[string]struct{}),
+		stop:       make(chan struct{}),
+		stopCtx:    stopCtx,
+		stopCancel: stopCancel,
 	}
 	planner := deps.Planner
 	if planner == nil {
@@ -260,11 +256,6 @@ func (r *Runtime) Start() {
 	}
 	r.started = true
 	r.mu.Unlock()
-	if r.deps.Audit != nil {
-		if err := r.deps.Audit.RecoverPending(r.now()); err != nil {
-			r.setStoreError(err)
-		}
-	}
 	if scheduler == nil {
 		return
 	}
@@ -302,11 +293,6 @@ func (r *Runtime) Stop() {
 		if r.scheduler != nil {
 			r.scheduler.Stop()
 		}
-		// A reset that already passed the consume gate may finish against the
-		// canceled context, but a reset that has not passed it must not issue
-		// an upstream consume after shutdown begins.
-		r.resetGate.Lock()
-		r.resetGate.Unlock()
 	})
 	r.wg.Wait()
 }

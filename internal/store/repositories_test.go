@@ -258,116 +258,10 @@ func TestRuntimeStateUnsupportedSchemaIsReported(t *testing.T) {
 	}
 }
 
-func TestResetAuditRetentionKeepsExactCutoffAndRecoversOnlyExplicitly(t *testing.T) {
-	dir := t.TempDir()
-	now := instant("2026-09-09T12:00:00Z")
-	clock := fixedClock{now: now}
-	newRepo := func() *ResetAuditRepository {
-		return NewResetAuditRepository(dir, 365*24*time.Hour, clock)
-	}
-	old := domain.ResetAudit{IdempotencyKey: "old", RequestedAt: instant("2025-09-09T11:59:59Z"), Outcome: domain.ResetSucceeded}
-	cutoff := domain.ResetAudit{IdempotencyKey: "cutoff", RequestedAt: instant("2025-09-09T12:00:00Z"), Outcome: domain.ResetPending}
-	current := domain.ResetAudit{IdempotencyKey: "current", RequestedAt: now, Outcome: domain.ResetPending}
-	if err := newRepo().AppendPending(old); err != nil {
-		t.Fatal(err)
-	}
-	if err := newRepo().AppendPending(cutoff); err != nil {
-		t.Fatal(err)
-	}
-	if err := newRepo().AppendPending(current); err != nil {
-		t.Fatal(err)
-	}
-
-	reconstructed := newRepo()
-	loaded, err := reconstructed.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded) != 2 {
-		t.Fatalf("retained audits = %#v, want cutoff and current", loaded)
-	}
-	if loaded[0].IdempotencyKey != "cutoff" || loaded[1].IdempotencyKey != "current" {
-		t.Fatalf("retained audit order/content = %#v", loaded)
-	}
-	if loaded[0].Outcome != domain.ResetPending {
-		t.Fatalf("ordinary Load recovered pending record: %#v", loaded[0])
-	}
-
-	if err := reconstructed.RecoverPending(now); err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := newRepo().Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, record := range recovered {
-		if record.Outcome != domain.ResetUnknown || !record.FinishedAt.Equal(now) || record.FinishedAt.Location() != time.UTC {
-			t.Fatalf("pending record was not recovered at explicit startup step: %#v", record)
-		}
-	}
-}
-
-func TestResetAuditDuplicateKeyReturnsConflict(t *testing.T) {
-	repo := NewResetAuditRepository(t.TempDir(), 365*24*time.Hour, fixedClock{now: instant("2026-09-09T12:00:00Z")})
-	record := domain.ResetAudit{IdempotencyKey: "same", Outcome: domain.ResetPending}
-	if err := repo.AppendPending(record); err != nil {
-		t.Fatal(err)
-	}
-	err := repo.AppendPending(record)
-	var conflict *domain.Error
-	if !errors.As(err, &conflict) || conflict.Code != domain.CodeIdempotencyConflict || conflict.HTTPStatus != 409 {
-		t.Fatalf("duplicate error = %#v", err)
-	}
-}
-
-func TestResetAuditReplaceUpdatesExistingRecord(t *testing.T) {
-	repo := NewResetAuditRepository(t.TempDir(), 365*24*time.Hour, fixedClock{now: instant("2026-09-09T12:00:00Z")})
-	pending := domain.ResetAudit{IdempotencyKey: "replace-me", Outcome: domain.ResetPending}
-	if err := repo.AppendPending(pending); err != nil {
-		t.Fatal(err)
-	}
-	finished := pending
-	finished.Outcome = domain.ResetSucceeded
-	finished.FinishedAt = instant("2026-09-09T12:01:00Z")
-	if err := repo.Replace(finished); err != nil {
-		t.Fatal(err)
-	}
-	got, found, err := repo.FindByKey(pending.IdempotencyKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !found || !reflect.DeepEqual(got, finished) {
-		t.Fatalf("replaced audit = %#v (found=%v), want %#v", got, found, finished)
-	}
-}
-
-func TestResetAuditDeleteBeforeUsesExclusiveCutoff(t *testing.T) {
-	repo := NewResetAuditRepository(t.TempDir(), 10*365*24*time.Hour, fixedClock{now: instant("2026-09-09T12:00:00Z")})
-	older := domain.ResetAudit{IdempotencyKey: "older", RequestedAt: instant("2025-01-01T00:00:00Z"), Outcome: domain.ResetSucceeded}
-	equal := domain.ResetAudit{IdempotencyKey: "equal", RequestedAt: instant("2025-06-01T00:00:00Z"), Outcome: domain.ResetSucceeded}
-	if err := repo.AppendPending(older); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.AppendPending(equal); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.DeleteBefore(equal.RequestedAt); err != nil {
-		t.Fatal(err)
-	}
-	got, err := repo.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].IdempotencyKey != "equal" {
-		t.Fatalf("DeleteBefore result = %#v", got)
-	}
-}
-
-func TestOrdinaryClearCannotDeleteAuditOrRuntimeState(t *testing.T) {
+func TestOrdinaryClearCannotDeleteRuntimeState(t *testing.T) {
 	dir := t.TempDir()
 	history := NewHistoryRepository(dir, 100)
 	states := NewRuntimeStateRepository(dir)
-	audit := NewResetAuditRepository(dir, 365*24*time.Hour, fixedClock{now: instant("2026-09-09T12:00:00Z")})
 	if err := history.Append(domain.OperationRecord{ID: "op-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -375,10 +269,6 @@ func TestOrdinaryClearCannotDeleteAuditOrRuntimeState(t *testing.T) {
 		"2026-09-09/p0/acct-a": {PlannedOccurrence: domain.PlannedOccurrence{ID: "2026-09-09/p0/acct-a"}, Status: domain.OccurrencePlanned},
 	}}
 	if err := states.Save(state); err != nil {
-		t.Fatal(err)
-	}
-	record := domain.ResetAudit{IdempotencyKey: "11111111-1111-4111-8111-111111111111", AccountKey: "acct-a", Outcome: domain.ResetPending}
-	if err := audit.AppendPending(record); err != nil {
 		t.Fatal(err)
 	}
 	if err := history.Clear(); err != nil {
@@ -392,34 +282,12 @@ func TestOrdinaryClearCannotDeleteAuditOrRuntimeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotAudit, err := audit.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(gotHistory) != 0 || len(gotState.Occurrences) != 1 || len(gotAudit) != 1 {
-		t.Fatalf("history=%#v state=%#v audit=%#v", gotHistory, gotState, gotAudit)
+	if len(gotHistory) != 0 || len(gotState.Occurrences) != 1 {
+		t.Fatalf("history=%#v state=%#v", gotHistory, gotState)
 	}
 }
 
-func TestResetAuditClearOnlyClearsAuditDocument(t *testing.T) {
-	dir := t.TempDir()
-	repo := NewResetAuditRepository(dir, 365*24*time.Hour, fixedClock{now: instant("2026-09-09T12:00:00Z")})
-	if err := repo.AppendPending(domain.ResetAudit{IdempotencyKey: "audit-1", Outcome: domain.ResetPending}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.Clear(); err != nil {
-		t.Fatal(err)
-	}
-	got, err := repo.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("audit after clear = %#v", got)
-	}
-}
-
-func TestRepositoryDocumentsRejectMalformedHistoryRuntimeAndAudit(t *testing.T) {
+func TestRepositoryDocumentsRejectMalformedHistoryAndRuntime(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
 		name string
@@ -428,10 +296,6 @@ func TestRepositoryDocumentsRejectMalformedHistoryRuntimeAndAudit(t *testing.T) 
 	}{
 		{name: "history", path: "history.json", load: func() error { _, err := NewHistoryRepository(dir, 100).Load(); return err }},
 		{name: "runtime", path: "runtime-state.json", load: func() error { _, err := NewRuntimeStateRepository(dir).Load(); return err }},
-		{name: "audit", path: "reset-audit.json", load: func() error {
-			_, err := NewResetAuditRepository(dir, 365*24*time.Hour, fixedClock{now: instant("2026-09-09T12:00:00Z")}).Load()
-			return err
-		}},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

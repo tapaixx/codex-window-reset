@@ -19,7 +19,6 @@ import (
 const (
 	quotaUsageURL        = "https://chatgpt.com/backend-api/wham/usage"
 	quotaResetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
-	quotaResetConsumeURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 )
 
 type quotaClock struct {
@@ -113,7 +112,6 @@ func newQuotaHost(now time.Time) *quotaTestHost {
 		responses: map[string]host.HTTPResponse{
 			quotaUsageURL:        {StatusCode: 200, Body: usageFixture(now, 10, 20, true)},
 			quotaResetCreditsURL: {StatusCode: 200, Body: []byte(`{"available_count":2,"applicable_available_count":2,"credits":[{"id":"credit","reset_type":"codex_rate_limits","status":"available","expires_at":"2026-09-16T00:00:00Z"}]}`)},
-			quotaResetConsumeURL: {StatusCode: 200, Body: []byte(`{"ok":true}`)},
 		},
 		errors: map[string]error{},
 	}
@@ -561,60 +559,6 @@ func TestQuotaGuardrailHoldClearsOnlyAfterEveryLongWindowRecovers(t *testing.T) 
 	}
 	if _, ok := state.GuardrailHolds[account.Key]; ok {
 		t.Fatalf("hold remained after complete recovery: %#v", state.GuardrailHolds)
-	}
-}
-
-func TestQuotaResetPostsCallerKeyWithoutRetry(t *testing.T) {
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	h := newQuotaHost(now)
-	s := New(h, store.NewRuntimeStateRepository(t.TempDir()), &quotaClock{now: now})
-	account := testAccount("acct-one", "auth-one")
-
-	got, err := s.Reset(context.Background(), account, "caller-key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.StatusCode != 200 || got.Category != "2xx" {
-		t.Fatalf("reset result = %#v", got)
-	}
-	if requestCount(h) != 1 || authCallCount(h) != 1 {
-		t.Fatalf("reset calls = HTTP %d, auth %d; want one each", requestCount(h), authCallCount(h))
-	}
-	h.mu.Lock()
-	request := h.requests[0]
-	h.mu.Unlock()
-	if request.Method != "POST" || request.URL != quotaResetConsumeURL {
-		t.Fatalf("reset request target = %#v", request)
-	}
-	var body map[string]string
-	if err := json.Unmarshal(request.Body, &body); err != nil {
-		t.Fatalf("reset body is not JSON: %v", err)
-	}
-	if !reflect.DeepEqual(body, map[string]string{"redeem_request_id": "caller-key"}) {
-		t.Fatalf("reset body = %#v", body)
-	}
-	authorization := request.Headers["Authorization"]
-	accountID := request.Headers["Chatgpt-Account-Id"]
-	if len(authorization) != 1 || len(accountID) != 1 || authorization[0] != "Bearer fixture-token" || accountID[0] != "upstream-one" {
-		t.Fatalf("reset auth headers = %#v", request.Headers)
-	}
-}
-
-func TestQuotaResetReturnsSanitizedFailureWithoutRetry(t *testing.T) {
-	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	h := newQuotaHost(now)
-	h.responses[quotaResetConsumeURL] = host.HTTPResponse{StatusCode: 503, Body: []byte(`{"error":{"message":"fixture-secret-token upstream body"}}`)}
-	s := New(h, store.NewRuntimeStateRepository(t.TempDir()), &quotaClock{now: now})
-
-	got, err := s.Reset(context.Background(), testAccount("acct-one", "auth-one"), "caller-key")
-	if err == nil || domain.CodeOf(err) != domain.CodeQuotaRefreshFailed {
-		t.Fatalf("reset error = %v, code = %q", err, domain.CodeOf(err))
-	}
-	if got.StatusCode != 503 || got.Category != "5xx" || requestCount(h) != 1 {
-		t.Fatalf("reset failure result = %#v, calls = %d", got, requestCount(h))
-	}
-	if strings.Contains(err.Error(), "fixture-secret-token") || strings.Contains(err.Error(), "upstream body") {
-		t.Fatalf("reset error leaked upstream detail: %v", err)
 	}
 }
 

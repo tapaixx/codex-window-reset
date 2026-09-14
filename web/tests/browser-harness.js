@@ -10,7 +10,6 @@
   try {
     const mode = new URL(location.href).searchParams.get('browser_test');
     if (mode?.startsWith('audit-')) await checkUIAudit(mode);
-    else if (mode === 'reset') await checkResetConfirmation(result);
     else if (mode?.startsWith('simulator')) await checkSimulator(result);
     else if (mode === 'contracts') await checkScheduleAndProbeContracts(result);
     else await checkResponsiveLayout(result);
@@ -58,7 +57,6 @@ async function checkUIAudit(mode) {
     await configure({ refreshDelay: 1500 });
     $('[data-action="refresh-all-quota"]').click();
     assert($('[data-action="refresh-all-quota"]').disabled, 'refresh button did not disable while the request is outstanding');
-    assert($('[data-row-action="reset"]').disabled, 'reset was enabled before quota arrived');
     assert(!$('#accounts-table').textContent.includes('80%'), 'usage appeared before the plugin response arrived');
     await waitFor(() => $('#accounts-table').textContent.includes('80%'), 'usage did not appear after refresh completed');
     assert(!$('[data-action="refresh-all-quota"]').disabled, 'refresh did not finish');
@@ -160,7 +158,7 @@ async function checkUIAudit(mode) {
     assert(getComputedStyle(input.nextElementSibling).outlineStyle !== 'none', 'switch has no visible focus');
   } else if (mode === 'audit-theme-dark') {
     assert(getComputedStyle(document.documentElement).colorScheme === 'dark', 'page color-scheme stayed light');
-    for (const selector of ['.topbar', '.accounts-panel', '.history-panel', '#reset-dialog', '.toolbar']) {
+    for (const selector of ['.topbar', '.accounts-panel', '.history-panel', '.toolbar']) {
       const color = getComputedStyle($(selector)).backgroundColor.match(/\d+/g)?.slice(0, 3).map(Number);
       assert(color?.every((v) => v < 100), `${selector} stayed light in dark mode`);
     }
@@ -250,41 +248,6 @@ async function waitForPanel() {
     () => document.querySelector('#connection[data-state="ready"]') && document.querySelector('[data-account-selection]'),
     'panel did not load account state',
   );
-}
-
-async function checkResetConfirmation(result) {
-  await waitForPanel();
-  const initial = await fixtureState();
-  const selection = document.querySelector('[data-account-selection]');
-  selection.click();
-  await waitFor(() => selection.checked, 'account selection did not update');
-
-  document.querySelector('[data-action="refresh-quota"]').click();
-  await waitFor(async () => (await fixtureState()).quotaRefreshRequests.length > initial.quotaRefreshRequests.length, 'quota refresh request was not sent');
-  await waitFor(() => !document.querySelector('[data-row-action="reset"]').disabled, 'reset action did not become eligible');
-
-  document.querySelector('[data-row-action="reset"]').click();
-  await waitFor(() => document.querySelector('#reset-dialog').open, 'reset confirmation dialog did not open');
-  result.dialogAccount = document.querySelector('#reset-account').textContent;
-  result.dialogCredits = document.querySelector('#reset-credits').textContent;
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const beforeCancel = await fixtureState();
-  result.cancelledRequestCount = beforeCancel.resetRequests.length;
-  if (result.cancelledRequestCount !== initial.resetRequests.length) throw new Error('reset was sent before confirmation');
-
-  document.querySelector('[data-action="close-reset"]').click();
-  await waitFor(() => !document.querySelector('#reset-dialog').open, 'reset dialog did not close');
-  const afterCancel = await fixtureState();
-  if (afterCancel.resetRequests.length !== initial.resetRequests.length) throw new Error('cancel sent a reset request');
-
-  document.querySelector('[data-row-action="reset"]').click();
-  await waitFor(() => document.querySelector('#reset-dialog').open, 'reset confirmation dialog did not reopen');
-  document.querySelector('#reset-confirm').click();
-  const final = await waitFor(async () => {
-    const state = await fixtureState();
-    return state.resetRequests.length === initial.resetRequests.length + 1 ? state : null;
-  }, 'confirmed reset request was not sent');
-  result.resetRequest = final.resetRequests.at(-1);
 }
 
 async function checkResponsiveLayout(result) {

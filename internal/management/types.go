@@ -66,9 +66,6 @@ type RuntimeAPI interface {
 	ClearHistory() error
 	ListQuota(context.Context) ([]domain.SnapshotView, error)
 	RefreshQuotas(context.Context, []string) ([]domain.SnapshotView, error)
-	ResetQuota(context.Context, string, string) (domain.ResetAudit, error)
-	ListResetAudit() ([]domain.ResetAudit, error)
-	ClearResetAudit(string) error
 }
 
 type statusResult struct {

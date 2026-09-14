@@ -85,22 +85,6 @@ test('invalid explicit BROWSER_BIN fails instead of falling back or skipping', a
   );
 });
 
-test('headless browser reset confirmation gates the request and sends the server contract', { skip: browserSkip }, async () => {
-  const fixture = await startFixtureServer();
-  try {
-    const result = await runBrowser(fixture.port, 1024, 900, 'reset');
-    assert.equal(result.ok, true, result.error || 'browser reset flow failed');
-    assert.equal(result.cancelledRequestCount, 0);
-    assert.equal(result.resetRequest.account_key, 'acct-browser');
-    assert.deepEqual(Object.keys(result.resetRequest).sort(), ['account_key', 'idempotency_key']);
-    assert.match(result.resetRequest.idempotency_key, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
-    assert.equal(result.dialogAccount, 'b***@example.com');
-    assert.equal(result.dialogCredits, '2');
-  } finally {
-    await fixture.close();
-  }
-});
-
 test('headless browser responsive viewports preserve essential state without page overflow', { skip: browserSkip }, async () => {
   const fixture = await startFixtureServer();
   try {
@@ -210,7 +194,7 @@ async function requestBody(request) {
 }
 
 async function startFixtureServer() {
-  const state = { resetRequests: [], quotaRefreshRequests: [], authFilesRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [], assetRequests: [] };
+  const state = { quotaRefreshRequests: [], authFilesRequests: [], scheduleRequests: [], probeRequests: [], simulationRequests: [], assetRequests: [] };
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url || '/', 'http://127.0.0.1');
@@ -259,10 +243,6 @@ async function startFixtureServer() {
         return;
       }
       if (url.pathname === '/v0/management/auth-files') {
-        await serveManagementFixture(request, response, url.pathname, state);
-        return;
-      }
-      if (url.pathname === '/v0/management/api-call') {
         await serveManagementFixture(request, response, url.pathname, state);
         return;
       }
@@ -333,7 +313,7 @@ async function serveManagementFixture(request, response, path, state) {
     jsonResponse(response, 200, { ok: true, result: { ...body, revision: 2 } });
     return;
   }
-  if (request.method === 'GET' && path.endsWith('/quota')) {
+  if (request.method === 'GET' && path.endsWith('/quota-snapshot')) {
     if (state.controls?.quotaDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.quotaDelay));
     jsonResponse(response, 200, { ok: true, result: [] });
     return;
@@ -341,10 +321,6 @@ async function serveManagementFixture(request, response, path, state) {
   if (request.method === 'GET' && path.endsWith('/history')) {
     if (state.controls?.historyDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.historyDelay));
     jsonResponse(response, 200, { ok: true, result: state.controls?.history || [] });
-    return;
-  }
-  if (request.method === 'GET' && path.endsWith('/reset-audit')) {
-    jsonResponse(response, 200, { ok: true, result: [] });
     return;
   }
   if (request.method === 'POST' && path.endsWith('/simulate')) {
@@ -357,7 +333,7 @@ async function serveManagementFixture(request, response, path, state) {
     jsonResponse(response, 202, { ok: true, result: { run_id: 'run-browser' } });
     return;
   }
-      if (request.method === 'POST' && path.endsWith('/quota/refresh')) {
+      if (request.method === 'POST' && path.endsWith('/quota-refresh')) {
     const body = await requestBody(request);
     state.quotaRefreshRequests.push(body);
     if (state.controls?.refreshDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.refreshDelay));
@@ -367,24 +343,6 @@ async function serveManagementFixture(request, response, path, state) {
     jsonResponse(response, 200, { ok: true, result });
         return;
       }
-      if (request.method === 'POST' && path === '/v0/management/api-call') {
-        const body = await requestBody(request);
-        state.quotaRefreshRequests.push(body);
-        const isCredits = String(body?.url || '').includes('rate-limit-reset-credits');
-        if (isCredits && state.controls?.resetDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.resetDelay));
-        if (!isCredits && state.controls?.failAuthIndexes?.includes(body.auth_index)) {
-          jsonResponse(response, 200, { status_code: 503, body: '{}' }); return;
-        }
-        const result = isCredits ? { applicable_available_count: 2, available_count: 2, credits: [] } : { rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18000, reset_at: 1893456000 } } };
-        jsonResponse(response, 200, { status_code: 200, body: JSON.stringify(result) });
-        return;
-      }
-  if (request.method === 'POST' && path.endsWith('/quota/reset')) {
-    const body = await requestBody(request);
-    state.resetRequests.push(body);
-    jsonResponse(response, 200, { ok: true, result: { account_key: 'acct-browser', outcome: 'succeeded' } });
-    return;
-  }
   jsonResponse(response, 404, { ok: false, error: { code: 'not_found', message: 'not found' } });
 }
 

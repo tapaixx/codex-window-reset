@@ -170,7 +170,7 @@ func (r *Router) handleManagement(request Request, endpoint, correlationID strin
 		}
 		return successResponse(clearResponse{Cleared: true}, correlationID)
 
-	case "/quota":
+	case "/quota-snapshot":
 		if method != "GET" {
 			return errorResponseWithHeaders(methodError("GET"), correlationID, map[string]string{"Allow": "GET"})
 		}
@@ -183,7 +183,7 @@ func (r *Router) handleManagement(request Request, endpoint, correlationID strin
 		}
 		return successResponse(result, correlationID)
 
-	case "/quota/refresh":
+	case "/quota-refresh":
 		if method != "POST" {
 			return errorResponseWithHeaders(methodError("POST"), correlationID, map[string]string{"Allow": "POST"})
 		}
@@ -199,45 +199,6 @@ func (r *Router) handleManagement(request Request, endpoint, correlationID strin
 			return errorResponse(err, correlationID)
 		}
 		return successResponse(result, correlationID)
-
-	case "/quota/reset":
-		if method != "POST" {
-			return errorResponseWithHeaders(methodError("POST"), correlationID, map[string]string{"Allow": "POST"})
-		}
-		var input quotaResetRequest
-		if err := decodeJSON(request, &input); err != nil {
-			return errorResponse(err, correlationID)
-		}
-		if r.runtime == nil {
-			return errorResponse(domainError(domain.CodeStoreCorrupt, 500, false, "runtime is unavailable"), correlationID)
-		}
-		result, err := r.runtime.ResetQuota(request.context(), input.AccountKey, input.IdempotencyKey)
-		if err != nil {
-			return errorResponse(err, correlationID)
-		}
-		return successResponse(result, correlationID)
-
-	case "/reset-audit":
-		if method == "GET" {
-			if r.runtime == nil {
-				return errorResponse(domainError(domain.CodeStoreCorrupt, 500, false, "runtime is unavailable"), correlationID)
-			}
-			result, err := r.runtime.ListResetAudit()
-			if err != nil {
-				return errorResponse(err, correlationID)
-			}
-			return successResponse(result, correlationID)
-		}
-		if method != "DELETE" {
-			return errorResponseWithHeaders(methodError("GET, DELETE"), correlationID, map[string]string{"Allow": "GET, DELETE"})
-		}
-		if r.runtime == nil {
-			return errorResponse(domainError(domain.CodeStoreCorrupt, 500, false, "runtime is unavailable"), correlationID)
-		}
-		if err := r.runtime.ClearResetAudit(request.header("X-Confirmation")); err != nil {
-			return errorResponse(err, correlationID)
-		}
-		return successResponse(clearResponse{Cleared: true}, correlationID)
 	}
 	return errorResponse(domainError(domain.CodeConfigInvalid, 404, false, "route was not found"), correlationID)
 }
@@ -250,11 +211,6 @@ type probeRequest struct {
 
 type quotaRefreshRequest struct {
 	AccountKeys []string `json:"account_keys"`
-}
-
-type quotaResetRequest struct {
-	AccountKey     string `json:"account_key"`
-	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type probeResponse struct {
@@ -362,14 +318,12 @@ func defaultStatus(code domain.ErrorCode) int {
 	case domain.CodeConfigInvalid:
 		return 400
 	case domain.CodeRevisionConflict, domain.CodeRunInProgress, domain.CodeAccountBusy,
-		domain.CodeAccountDisabled, domain.CodeIdempotencyConflict:
+		domain.CodeAccountDisabled:
 		return 409
 	case domain.CodeAccountUnavailable:
 		return 404
 	case domain.CodeQuotaRefreshFailed:
 		return 502
-	case domain.CodeResetOutcomeUnknown:
-		return 503
 	default:
 		return 500
 	}

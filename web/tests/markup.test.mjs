@@ -32,18 +32,17 @@ test('panel IDs are unique and the four monitoring regions are present together'
   const html = await readProduction('panel.html');
   const ids = [...html.matchAll(/\sid=["']([^"']+)["']/g)].map((match) => match[1]);
   assert.equal(new Set(ids).size, ids.length);
-  assert.match(html, /<dialog\b[^>]*id=["']reset-dialog["']/);
   for (const title of ['账号状态', '自动检测', '窗口限额 · 预热对比模拟器', '检测历史']) assert.match(html, new RegExp(title));
   assert.doesNotMatch(html, /role=["']tab["']/);
 });
 
-test('panel exposes explicit probe consent, reset audit, and editable period collections', async () => {
+test('panel exposes explicit probe consent and editable period collections without a reset feature', async () => {
   const html = await readProduction('panel.html');
   assert.match(html, /id=["']probe-dialog["']/u);
-  assert.match(html, /id=["']reset-audit-output["']/u);
   assert.match(html, /id=["']work-periods["']/u);
   assert.match(html, /id=["']blackout-periods["']/u);
-  assert.match(html, /DELETE AUDIT/u);
+  assert.doesNotMatch(html, /id=["'](?:reset-dialog|reset-audit-output|clear-audit-dialog)["']/u);
+  assert.doesNotMatch(html, /DELETE AUDIT/u);
 });
 
 test('summary exposes the five operational counts from the confirmed design', async () => {

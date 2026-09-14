@@ -9,8 +9,6 @@ const ERROR_MESSAGES = {
   quota_refresh_failed: '配额刷新失败，请检查宿主连接后重试。',
   probe_failed: '健康探测失败，请查看操作记录后重试。',
   window_unverified: '窗口结果未能验证，请查看操作记录。',
-  idempotency_conflict: '此重置请求标识已用于其他账户。',
-  reset_outcome_unknown: '重置结果未知，请查看重置审计后再决定是否操作。',
   store_corrupt: '持久化数据不可用，调度已暂停但诊断仍可继续。',
   unauthorized: 'CLIProxyAPI 管理密钥无效或已变更，请刷新宿主管理面板后重试。',
   forbidden: 'CLIProxyAPI 拒绝了此管理请求，请检查管理密钥权限。',
@@ -209,14 +207,14 @@ export async function refreshAccountQuotas(accounts, { onUpdate = () => {}, onPr
   // panel loads can read it without contacting the upstream API again.
   const queue = [...new Map((Array.isArray(accounts) ? accounts : []).map((account) => [account.account_key, account])).values()]
     .filter((account) => String(account?.account_key || '').trim());
-  if (!queue.length) return { succeeded: 0, failed: 0, resetFailed: 0 };
-  const views = await request('/quota/refresh', {
+  if (!queue.length) return { succeeded: 0, failed: 0 };
+  const views = await request('/quota-refresh', {
     method: 'POST',
     timeoutMs,
     body: { account_keys: queue.map((account) => account.account_key) },
   });
   const byKey = new Map((Array.isArray(views) ? views : []).map((view) => [view?.snapshot?.account_key || view?.account_key, view]));
-  const counts = { succeeded: 0, failed: 0, resetFailed: 0 };
+  const counts = { succeeded: 0, failed: 0 };
   for (const account of queue) {
     const accountKey = account.account_key;
     const view = byKey.get(accountKey) || { account_key: accountKey, refresh_error_code: 'quota_refresh_failed', snapshot: { account_key: accountKey } };
