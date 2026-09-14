@@ -30,6 +30,23 @@ test('manual refresh sends all accounts, including disabled ones, to the plugin 
   assert.deepEqual(JSON.parse(calls[0].options.body), { account_keys: ['enabled', 'disabled'] });
 });
 
+test('refresh-all sends no keys and lets the plugin response define the batch', async (t) => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: [
+      { stale: false, snapshot: { account_key: 'known', captured_at: new Date().toISOString() } },
+      { stale: false, snapshot: { account_key: 'discovered-after-load', captured_at: new Date().toISOString() } },
+    ] }) };
+  });
+  const updates = [];
+  const result = await api.refreshAccountQuotas([], { onUpdate: (update) => updates.push(update) });
+  assert.equal(calls.length, 1, 'refresh-all must not fetch the credential list first');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { account_keys: [] });
+  assert.deepEqual(result, { succeeded: 2, failed: 0 });
+  assert.deepEqual(updates.map((update) => update.accountKey), ['known', 'discovered-after-load']);
+});
+
 test('plugin refresh errors are reported per account while preserving successful snapshots', async (t) => {
   const updates = [];
   t.mock.method(globalThis, 'fetch', async () => ({ ok: true, status: 200, json: async () => ({ ok: true, result: [

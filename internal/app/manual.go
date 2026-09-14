@@ -130,6 +130,11 @@ func requestedKeys(keys []string) ([]string, error) {
 // is represented in that account's SnapshotView; it does not discard sibling
 // results or turn an otherwise useful bulk response into an all-or-nothing
 // error.
+//
+// An empty key list means "every account the host currently exposes".  The
+// batch already needs one authoritative discovery read, so a caller wanting a
+// refresh-all does not have to fetch the account list itself and echo the keys
+// back; that second round trip only duplicated work already done here.
 func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.SnapshotView, error) {
 	if r == nil {
 		return nil, context.Canceled
@@ -137,24 +142,42 @@ func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.Sn
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	normalized, err := requestedKeys(keys)
-	if err != nil {
-		return nil, err
-	}
 	// Discover accounts once for the whole batch instead of once per account.
 	// accounts.Service.Find re-lists every credential on the host, so calling
 	// it from each worker turned an N-account refresh into N full host
 	// listings; every account in this batch shares one point-in-time read.
-	byKey := make(map[string]accounts.Account, len(normalized))
-	if discovered, listErr := r.deps.Accounts.List(ctx); listErr == nil {
+	discovered, listErr := r.deps.Accounts.List(ctx)
+	byKey := make(map[string]accounts.Account, len(discovered))
+	order := make([]string, 0, len(discovered))
+	if listErr == nil {
 		for _, account := range discovered {
 			key := normalizeKey(account.Key)
 			if key == "" {
 				continue
 			}
+			if _, exists := byKey[key]; exists {
+				continue
+			}
 			account.Key = key
 			byKey[key] = account
+			order = append(order, key)
 		}
+	}
+
+	var normalized []string
+	if len(keys) == 0 {
+		// Refresh-all cannot fall back to per-account cached views the way an
+		// explicit request can: without discovery there is no key list at all.
+		if listErr != nil {
+			return nil, appError(domain.CodeQuotaRefreshFailed, 502, true, "account discovery failed")
+		}
+		normalized = order
+	} else {
+		requested, err := requestedKeys(keys)
+		if err != nil {
+			return nil, err
+		}
+		normalized = requested
 	}
 	// Register every worker while holding Runtime.mu. Stop takes the same lock
 	// before entering wg.Wait, so it cannot observe a zero counter and return

@@ -337,7 +337,11 @@ async function serveManagementFixture(request, response, path, state) {
     const body = await requestBody(request);
     state.quotaRefreshRequests.push(body);
     if (state.controls?.refreshDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.refreshDelay));
-    const keys = Array.isArray(body?.account_keys) ? body.account_keys : [];
+    const requested = Array.isArray(body?.account_keys) ? body.account_keys : [];
+    // Mirror the plugin: no keys means "every account discovery finds".
+    const keys = requested.length
+      ? requested
+      : (state.controls?.files || [{ auth_index: 'browser' }]).map((file) => `acct-${file.auth_index}`);
     const failing = new Set((state.controls?.failAuthIndexes || []).map((authIndex) => `acct-${authIndex}`));
     const result = keys.map((key) => (failing.has(key) ? failedQuotaView(key) : quotaView(key)));
     jsonResponse(response, 200, { ok: true, result });

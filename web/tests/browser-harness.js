@@ -41,8 +41,13 @@ async function checkUIAudit(mode) {
     const before = (await fixtureState()).quotaRefreshRequests.length;
     await refresh();
     const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
-    assert(requests.some((r) => r.account_keys?.includes('acct-revived')) && requests.some((r) => r.account_keys?.includes('acct-new')), 're-enabled/new credentials were not refreshed');
-    assert(requests.some((r) => r.account_keys?.includes('acct-disabled')), 'disabled credential was not refreshed');
+    // Refresh-all sends no keys: the plugin already discovers accounts for the
+    // batch, so the panel must not fetch the credential list and echo it back.
+    assert(requests.length === 1 && !requests[0].account_keys?.length, `refresh-all sent an echoed key list: ${JSON.stringify(requests)}`);
+    // Newly discovered and re-enabled credentials still get refreshed and shown.
+    for (const key of ['acct-revived', 'acct-new', 'acct-disabled']) {
+      assert($(`#accounts-table [data-account-key="${key}"]`), `${key} did not appear after refresh-all`);
+    }
     assert($('#accounts-table [data-account-key="acct-revived"]').textContent.includes('80%'), 'successful quota lost when another account fails');
     assert($('#accounts-table [data-account-key="acct-browser"]').textContent.includes('已过期'), 'failed quota was not marked stale');
     assert($('[data-account-selection="acct-browser"]').checked, 'manual selection was lost');
@@ -91,7 +96,10 @@ async function checkUIAudit(mode) {
     await configure({ files: [file('disabled', true)] });
     const before = (await fixtureState()).quotaRefreshRequests.length; await refresh();
     const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
-    assert(requests.some((r) => r.account_keys?.includes('acct-disabled')), 'disabled account was not refreshed');
+    assert(requests.length === 1, 'refresh-all did not reach the plugin');
+    // A host that exposes only disabled credentials must still be refreshed:
+    // quota refresh is a read-only diagnostic, not a probe.
+    assert($('#accounts-table [data-account-key="acct-disabled"]')?.textContent.includes('80%'), 'disabled account was not refreshed');
     assert(!/没有可刷新的已启用账号/.test($('#account-feedback').textContent), 'disabled account was incorrectly reported as skipped');
   } else if (mode === 'audit-refresh-failure') {
     await configure({ failAuthIndexes: ['browser'] }); await refresh();
@@ -206,10 +214,12 @@ async function checkSimulator(result) {
   result.assetRequests = (await fixtureState()).assetRequests;
   const beforeRefreshAll = await fixtureState();
   document.querySelector('[data-action="refresh-all-quota"]').click();
+  // Refresh-all is one plugin round trip: the plugin discovers accounts for the
+  // batch, so the panel no longer fetches the credential list first.
   const afterRefreshAll = await waitFor(async () => {
     const state = await fixtureState();
-    return state.authFilesRequests.length > beforeRefreshAll.authFilesRequests.length && state.quotaRefreshRequests.length > beforeRefreshAll.quotaRefreshRequests.length ? state : null;
-  }, 'refresh-all quota did not rediscover accounts and refresh quota');
+    return state.quotaRefreshRequests.length > beforeRefreshAll.quotaRefreshRequests.length ? state : null;
+  }, 'refresh-all quota did not reach the plugin');
   result.refreshAll = { authFiles: afterRefreshAll.authFilesRequests.length - beforeRefreshAll.authFilesRequests.length, quotaCalls: afterRefreshAll.quotaRefreshRequests.length - beforeRefreshAll.quotaRefreshRequests.length };
   const focusPoint = document.querySelector('[data-preheat-marker]');
   focusPoint?.focus();

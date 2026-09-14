@@ -207,21 +207,24 @@ export async function refreshAccountQuotas(accounts, { onUpdate = () => {}, onPr
   // panel loads can read it without contacting the upstream API again.
   const queue = [...new Map((Array.isArray(accounts) ? accounts : []).map((account) => [account.account_key, account])).values()]
     .filter((account) => String(account?.account_key || '').trim());
-  if (!queue.length) return { succeeded: 0, failed: 0 };
+  const requested = queue.map((account) => account.account_key);
   const views = await request('/quota-refresh', {
     method: 'POST',
     timeoutMs,
-    body: { account_keys: queue.map((account) => account.account_key) },
+    body: { account_keys: requested },
   });
   const byKey = new Map((Array.isArray(views) ? views : []).map((view) => [view?.snapshot?.account_key || view?.account_key, view]));
+  // An empty request asks the plugin to refresh every account it can discover,
+  // so the response defines the batch. An explicit request stays driven by the
+  // requested keys, where a missing response is that account's failure.
+  const batch = requested.length ? requested : [...byKey.keys()].filter(Boolean);
   const counts = { succeeded: 0, failed: 0 };
-  for (const account of queue) {
-    const accountKey = account.account_key;
+  for (const accountKey of batch) {
     const view = byKey.get(accountKey) || { account_key: accountKey, refresh_error_code: 'quota_refresh_failed', snapshot: { account_key: accountKey } };
     if (view.refresh_error_code) counts.failed++;
     else counts.succeeded++;
     onUpdate({ accountKey, phase: 'complete', view });
-    onProgress({ ...counts, total: queue.length });
+    onProgress({ ...counts, total: batch.length });
   }
   return counts;
 }

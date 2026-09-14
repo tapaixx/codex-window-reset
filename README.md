@@ -175,7 +175,11 @@ snapshot paths exist:
   stores the resulting display snapshot in process memory, and serves it from
   `GET /quota-snapshot` on subsequent panel loads; the snapshot includes its capture
   time and disappears only when the plugin process restarts or history is
-  explicitly cleared.
+  explicitly cleared. Refreshing selected accounts sends their keys; refreshing
+  all accounts sends an empty `account_keys` list, which means "every account
+  discovery finds" — the plugin already performs one authoritative discovery
+  read per batch, so the panel does not fetch the credential list and echo it
+  back.
 - The plugin runtime refreshes its own decision snapshot immediately before
   and after a Probe or Preheat Request. Runtime snapshots stay in
   memory and become stale exactly five minutes after capture.

@@ -1,5 +1,47 @@
 # Release verification evidence
 
+## 刷新全部额度去掉多余的凭证列表往返（当前修复）
+
+2026-09-14：用户报告"刷新已选额度"（三个凭证全勾选）很快，而"刷新全部额度"
+会卡住、容易超时，并质疑为什么刷新全部要再拉一次凭证列表。
+
+排查：从服务器侧实测两条路径都不慢，**没能复现卡顿**——
+`GET /v0/management/auth-files` 132–155ms、`POST /quota-refresh`（3 个账号）
+0.6–1.2s，经公网 CDN 与直连容器结果一致；`/auth-files` 返回的 3 个凭证全是
+codex、均未停用，两个按钮的账号集合完全相同。因此不能断言根因，需要浏览器
+Network 面板的实际耗时才能钉死。
+
+但用户的设计质疑成立：`refreshAllQuota` 会先 `GET /auth-files` 再发刷新请求，
+这一步在 v0.0.18 及之前是**架构必需**的（当时由浏览器自己拼上游 Codex 请求，
+payload 里需要每个账号的 `auth_index`）；v0.0.19 把这件事整体挪到服务端、并让
+`RefreshQuotas` 自己做一次账号发现之后，它就退化成旧架构的遗留——既重复了
+服务端已经做过的发现工作，又给整个操作加了一个可以独立失败/超时（上限 15 秒）
+的前置依赖。
+
+修复：`POST /quota-refresh` 的 `account_keys` 为空即表示"刷新发现到的全部账号"，
+批次由服务端权威决定。"刷新全部"因此只发一个请求。发现失败时，刷新全部返回
+`quota_refresh_failed`（而不是静默地报告"无事可做"）；显式指定 key 的请求维持
+原有逐账号降级行为。`StartManualProbes` 仍然拒绝空选择——手动检测要求显式选择
+账号是安全属性，没有被一并放宽。
+
+回归证据：`TestRefreshQuotasWithoutKeysRefreshesEveryDiscoveredAccount`、
+`TestRefreshQuotasWithoutKeysFailsWhenDiscoveryFails`、
+`TestRefreshQuotasRejectsDuplicateAndBlankKeys`（Go）；
+`refresh-all sends no keys and lets the plugin response define the batch`
+（Node）；浏览器回归 `audit-refresh` 改为断言刷新全部只发一个不含 key 的请求，
+且新增/重新启用的凭证仍会出现在表格里并被刷新。
+
+## 模拟器分段明细只保留策略 B
+
+2026-09-14：用户按 11:20–11:30 的预热计划核对，看到明细里 `10:30–12:30 受限`
+而困惑。实跑模拟器确认这是**策略 A（首次使用，无预热）**的对照组分段——A 的
+窗口在上班时才开启，额度用完后本就受限；同一份配置下策略 B 在 11:25（错峰后的
+实际预热时刻）续窗，11:25–12:30 恢复可用，与预期一致。
+
+明细表原本把 A、B 两条线的分段混在一张表里、行首只标一个裸的 `A`/`B`，描述文字
+只在上方卡片上，容易把对照组读成自己的计划。按用户要求移除策略 A 的分段行，
+表头去掉"策略"列，caption 标明「策略 B 配置预热」；时间轴上的 A/B 双泳道保留。
+
 ## GET /quota 与 POST /quota/reset 被 CLIProxyAPI 原生路由拦截（当前修复）
 
 2026-09-14：用户反馈额度快照刷新一直不生效，面板报 `GET .../quota` 400

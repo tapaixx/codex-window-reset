@@ -271,16 +271,20 @@ function bootPanel() {
 
   async function refreshQuotaSnapshots(keys) {
     const accounts = keys.map((key) => state.accounts.find((account) => account.account_key === key)).filter(Boolean);
-    text('#account-feedback', `正在刷新 ${accounts.length} 个账号；结果返回后写入插件缓存。`);
+    text('#account-feedback', keys.length ? `正在刷新 ${accounts.length} 个账号；结果返回后写入插件缓存。` : '正在刷新全部账号；结果返回后写入插件缓存。');
     // The plugin now returns every account's result in one response, so
     // onUpdate fires synchronously for the whole batch rather than trickling
     // in over time. Merge into state without re-rendering the account table
     // on every iteration; withQuotaRefresh renders once after this resolves.
     const merged = quotaIndex();
+    const unknownKeys = [];
     return refreshAccountQuotas(accounts, {
-      onUpdate: ({ accountKey, view }) => { merged[accountKey] = view; },
+      onUpdate: ({ accountKey, view }) => {
+        merged[accountKey] = view;
+        if (!state.accounts.some((account) => account.account_key === accountKey)) unknownKeys.push(accountKey);
+      },
       onProgress: ({ succeeded, failed, total }) => text('#account-feedback', `额度刷新 ${succeeded + failed}/${total} · 成功 ${succeeded}，失败 ${failed}`),
-    }).then((outcome) => { state.quota = Object.values(merged); return outcome; });
+    }).then((outcome) => { state.quota = Object.values(merged); return { ...outcome, unknownKeys }; });
   }
 
   function reportQuotaRefresh(outcome, skipped = 0) {
@@ -302,18 +306,34 @@ function bootPanel() {
 
   async function refreshAllQuota(button) {
     return withQuotaRefresh(button, async () => {
-      state.accountsGeneration = (state.accountsGeneration || 0) + 1;
+      // The plugin discovers accounts server-side for every batch, so a
+      // refresh-all sends no keys instead of fetching the credential list here
+      // and echoing it back. That second round trip duplicated work the server
+      // already does and could stall the whole action on its own.
+      const outcome = await refreshQuotaSnapshots([]);
+      if (!outcome.succeeded && !outcome.failed) { text('#account-feedback', '未发现可刷新的账号。'); return outcome; }
+      // Only a credential added or re-enabled since the panel loaded produces a
+      // snapshot without a row; fetch identities just for that rare case.
+      if (outcome.unknownKeys?.length) await reloadAccountRows();
+      reportQuotaRefresh(outcome, 0);
+      return outcome;
+    });
+  }
+
+  async function reloadAccountRows() {
+    state.accountsGeneration = (state.accountsGeneration || 0) + 1;
+    const generation = state.accountsGeneration;
+    try {
       const files = normalizeHostAuthFiles(await hostManagementRequest('/auth-files'));
+      if (state.accountsGeneration !== generation) return;
       const previous = new Set(state.selected);
       state.accounts = files;
       state.selected = new Set([...previous].filter((key) => files.some((account) => account.account_key === key && !account.disabled)));
       renderAccounts();
-      const keys = files.map((account) => account.account_key);
-      if (!keys.length) { text('#account-feedback', '未发现可刷新的账号。'); return; }
-      const outcome = await refreshQuotaSnapshots(keys);
-      reportQuotaRefresh(outcome, 0);
-      return outcome;
-    });
+    } catch {
+      // Identity metadata is presentation only. Keep the rows already shown
+      // rather than failing a refresh whose quota results already arrived.
+    }
   }
 
   function openProbe() {

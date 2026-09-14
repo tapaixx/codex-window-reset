@@ -186,23 +186,24 @@ function simTimeline(result, timezone, groups, config = {}) {
   scroll.append(chart);
   card.append(header, legend, scroll, simElement('p', '色块表示工作时段的预计覆盖；虚线框表示允许预热的时段，圆点标出首个计划执行时间。', 'timeline-caption'));
 
+  // Only strategy B is listed. Strategy A is the no-preheat control line whose
+  // segments exist to make the timeline comparison readable; repeating them as
+  // rows invited reading the control group as the configured plan.
   const details = simElement('details', '', 'timeline-details');
   details.append(simElement('summary', '查看分段时间明细'));
   const table = simElement('table');
-  const caption = simElement('caption', `工作覆盖明细 · ${timezone}`); table.append(caption);
+  const caption = simElement('caption', `策略 B 配置预热 · 工作覆盖明细 · ${timezone}`); table.append(caption);
   const head = simElement('thead'); const headings = simElement('tr');
-  for (const text of ['策略', '时间', '状态']) { const th = simElement('th', text); th.scope = 'col'; headings.append(th); }
+  for (const text of ['时间', '状态']) { const th = simElement('th', text); th.scope = 'col'; headings.append(th); }
   head.append(headings); table.append(head);
   const body = simElement('tbody');
-  for (const [letter, key] of [['A', 'baseline'], ['B', 'scheduled']]) {
-    for (const segment of result[key].timeline_segments) {
-      if (segment.kind === 'idle') continue;
-      const range = simulationRange(segment.start, segment.end, timezone);
-      if (!range) continue;
-      const row = simElement('tr');
-      for (const value of [letter, range.label, simulationKinds[segment.kind] || '未知']) row.append(simElement('td', value));
-      body.append(row);
-    }
+  for (const segment of result.scheduled?.timeline_segments || []) {
+    if (segment.kind === 'idle') continue;
+    const range = simulationRange(segment.start, segment.end, timezone);
+    if (!range) continue;
+    const row = simElement('tr');
+    for (const value of [range.label, simulationKinds[segment.kind] || '未知']) row.append(simElement('td', value));
+    body.append(row);
   }
   table.append(body); details.append(table); card.append(details);
   return card;

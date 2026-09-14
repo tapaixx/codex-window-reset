@@ -615,13 +615,58 @@ func TestRefreshQuotasDiscoversAccountsOnceForTheWholeBatch(t *testing.T) {
 	}
 }
 
-func TestRefreshQuotasRejectsEmptyAndDuplicateKeys(t *testing.T) {
+func TestRefreshQuotasRejectsDuplicateAndBlankKeys(t *testing.T) {
 	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
 	defer fx.runtime.Stop()
-	for _, keys := range [][]string{nil, {}, {"a", "a"}, {""}} {
+	for _, keys := range [][]string{{"a", "a"}, {""}} {
 		if _, err := fx.runtime.RefreshQuotas(context.Background(), keys); domain.CodeOf(err) != domain.CodeConfigInvalid {
 			t.Fatalf("keys=%v err=%v", keys, err)
 		}
+	}
+}
+
+func TestRefreshQuotasWithoutKeysRefreshesEveryDiscoveredAccount(t *testing.T) {
+	accountsList := task7Accounts(3)
+	fx := newTask7Fixture(t, accountsList...)
+	defer fx.runtime.Stop()
+	for _, account := range accountsList {
+		fx.quota.snapshots[account.Key] = domain.UsageSnapshot{AccountKey: account.Key}
+	}
+
+	// A refresh-all caller does not have to discover accounts itself and echo
+	// the key list back; the batch already performs one authoritative read.
+	for _, keys := range [][]string{nil, {}} {
+		views, err := fx.runtime.RefreshQuotas(context.Background(), keys)
+		if err != nil {
+			t.Fatalf("keys=%v err=%v", keys, err)
+		}
+		if len(views) != len(accountsList) {
+			t.Fatalf("keys=%v views=%d, want %d", keys, len(views), len(accountsList))
+		}
+		got := make(map[string]struct{}, len(views))
+		for _, view := range views {
+			if view.RefreshErrorCode != "" {
+				t.Fatalf("keys=%v unexpected refresh error: %#v", keys, view)
+			}
+			got[view.Snapshot.AccountKey] = struct{}{}
+		}
+		for _, account := range accountsList {
+			if _, ok := got[account.Key]; !ok {
+				t.Fatalf("keys=%v did not refresh %q: %#v", keys, account.Key, views)
+			}
+		}
+	}
+}
+
+func TestRefreshQuotasWithoutKeysFailsWhenDiscoveryFails(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+	fx.accounts.failList = true
+
+	// Without discovery there is no key list at all, so refresh-all must report
+	// the failure instead of silently reporting that nothing needed refreshing.
+	if _, err := fx.runtime.RefreshQuotas(context.Background(), nil); domain.CodeOf(err) != domain.CodeQuotaRefreshFailed {
+		t.Fatalf("error code = %q, want %q (%v)", domain.CodeOf(err), domain.CodeQuotaRefreshFailed, err)
 	}
 }
 
