@@ -1,5 +1,28 @@
 # Release verification evidence
 
+## 数据目录与插件自身安装目录共用导致重装丢配置（当前修复）
+
+2026-09-13：用户报告重装插件会导致配置全部丢失。根因是 `defaultDataDir()` 把
+`config.json`、`runtime-state.json`、`history.json`、`reset-audit.json` 直接
+写在 `/CLIProxyAPI/plugins/codex-window-reset/` 里——这正是插件商店用来存放
+该插件自身安装产物（`codex-window-reset.so`）的目录。README 里"升级前请手动
+备份数据目录"的说明说明这个风险其实已经被知道，但一直没有结构性修复，只是把
+备份责任推给了 Operator。
+
+修复：数据目录改为同级但不同名的 `/CLIProxyAPI/plugins/codex-window-reset-data/`
+（相对路径回退同理，`plugins/codex-window-reset-data`），不再与插件自身的安装
+目录重叠；首次启动时如果新目录为空、旧目录下有这四个文件，会自动把它们迁移
+过去且只做一次，新目录一旦已有数据就永远不会被旧目录的内容覆盖（防止旧版本
+重新安装时用过期数据覆盖当前配置）。
+
+回归证据：`TestResolveDataDirUsesASiblingOfThePluginInstallDirectory` 验证新
+数据目录路径不等于插件安装目录；`TestResolveDataDirMigratesFilesLeftByAnOlderInstall`
+验证旧目录中的四个数据文件会被迁移、且插件自身的 `.so` 文件不受影响；
+`TestResolveDataDirMigrationIsIdempotentAndNeverOverwritesNewData` 验证已完成
+迁移后，即使旧目录被重新安装流程重建并写入过期数据，新目录中较新的数据也不会
+被覆盖。三个测试都先在改回旧实现（新增符号不存在）时确认编译失败，证明测试
+确实绑定在新实现上，而不是形同虚设。
+
 ## 批量额度刷新与账号列表加载的性能修复（当前修复）
 
 2026-09-13：复查“页面首次启动、模拟器首次启动、各种调用”的性能问题，发现两处

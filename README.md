@@ -201,12 +201,22 @@ preheating fails open and records `quota_unknown_fail_open` for auditability.
 When `/CLIProxyAPI/plugins` exists, the default data directory is:
 
 ```text
-/CLIProxyAPI/plugins/codex-window-reset
+/CLIProxyAPI/plugins/codex-window-reset-data
 ```
 
-In a development or other host layout without that directory, the fallback is
-`plugins/codex-window-reset` relative to the process working directory. The
-directory contains:
+This is deliberately a sibling of, not the same directory as,
+`/CLIProxyAPI/plugins/codex-window-reset`, which the plugin store owns as this
+plugin's own install location and may recreate on reinstall or upgrade.
+Versions through v0.0.19 stored data inside that install directory, so a
+plugin-store reinstall could silently destroy the Operator's schedule,
+runtime state, and Reset Audit history; upgrading past v0.0.19 migrates any
+files an older install left behind into the new directory automatically, once,
+on first startup.
+
+In a development or other host layout without `/CLIProxyAPI/plugins`, the
+fallback is `plugins/codex-window-reset-data` relative to the process working
+directory (with the same one-time migration from `plugins/codex-window-reset`).
+The directory contains:
 
 ```text
 config.json          versioned schedule configuration and revision
@@ -229,17 +239,25 @@ raw credential JSON, or full upstream bodies.
 
 ## 升级与回滚 / Upgrade and rollback
 
-升级前按宿主流程停用插件并备份数据目录，再替换对应架构的 `.so`。
-重启后核对注册版本和面板，手动刷新配额后再启用调度。回滚先恢复已验证
-的旧插件文件；只有持久化格式变化时才需要恢复数据备份。不要通过删除
-配置或审计文件来“重置升级”。
+从 v0.0.19 之前的版本升级时，插件会在首次启动时自动把旧安装目录中的
+`config.json`、`runtime-state.json`、`history.json`、`reset-audit.json`
+迁移到新的数据目录，无需手动搬运；仍建议按宿主流程停用插件并备份数据目录
+后再替换对应架构的 `.so`，以应对迁移之外的异常情况。重启后核对注册版本
+和面板，手动刷新配额后再启用调度。回滚先恢复已验证的旧插件文件；只有
+持久化格式变化时才需要恢复数据备份。不要通过删除配置或审计文件来
+“重置升级”。
 
-Before an upgrade, stop or disable the host plugin according to CLIProxyAPI's
-normal procedure and back up the plugin data directory. Replace the matching
-architecture `.so`, restart CLIProxyAPI, confirm the panel URL and registration
-version, and run a manual quota refresh before enabling new schedule behavior.
-Keep `config.json`, `runtime-state.json`, `history.json`, and
-`reset-audit.json` unless the release notes require a migration.
+Upgrading from a version before v0.0.19 automatically migrates
+`config.json`, `runtime-state.json`, `history.json`, and `reset-audit.json`
+from the old install-directory location into the new data directory on first
+startup; manually copying files is not required. Backing up the plugin data
+directory before an upgrade is still recommended as a safeguard for anything
+outside that migration. Stop or disable the host plugin according to
+CLIProxyAPI's normal procedure, replace the matching architecture `.so`,
+restart CLIProxyAPI, confirm the panel URL and registration version, and run
+a manual quota refresh before enabling new schedule behavior. Keep
+`config.json`, `runtime-state.json`, `history.json`, and `reset-audit.json`
+unless the release notes require a migration.
 
 To roll back, stop or disable the plugin, restore the previously verified
 architecture-specific `.so`, restart the host, and verify the panel and status

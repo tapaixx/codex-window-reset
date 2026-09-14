@@ -50,6 +50,91 @@ func TestEmbeddedPanelShowsTheBuildVersion(t *testing.T) {
 	}
 }
 
+func TestResolveDataDirUsesASiblingOfThePluginInstallDirectory(t *testing.T) {
+	root := t.TempDir()
+	dataDir := resolveDataDir(root)
+	legacyDir := filepath.Join(root, "codex-window-reset")
+	if dataDir == legacyDir {
+		t.Fatalf("data dir must not be the plugin's own install directory: %s", dataDir)
+	}
+	if dataDir != legacyDir+dataDirSuffix {
+		t.Fatalf("data dir = %s, want %s", dataDir, legacyDir+dataDirSuffix)
+	}
+}
+
+func TestResolveDataDirMigratesFilesLeftByAnOlderInstall(t *testing.T) {
+	root := t.TempDir()
+	legacyDir := filepath.Join(root, "codex-window-reset")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range legacyDataFiles {
+		if err := os.WriteFile(filepath.Join(legacyDir, name), []byte(`{"marker":"`+name+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A plugin-store reinstall of a prior release recreates the legacy
+	// directory alongside the .so it just extracted; that unrelated file
+	// must survive the migration.
+	if err := os.WriteFile(filepath.Join(legacyDir, "codex-window-reset.so"), []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := resolveDataDir(root)
+	for _, name := range legacyDataFiles {
+		migrated, err := os.ReadFile(filepath.Join(dataDir, name))
+		if err != nil {
+			t.Fatalf("%s did not migrate: %v", name, err)
+		}
+		if string(migrated) != `{"marker":"`+name+`"}` {
+			t.Fatalf("%s migrated with wrong content: %s", name, migrated)
+		}
+		if _, err := os.Stat(filepath.Join(legacyDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s was not removed from the legacy directory: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(legacyDir, "codex-window-reset.so")); err != nil {
+		t.Fatalf("unrelated plugin file was disturbed by migration: %v", err)
+	}
+}
+
+func TestResolveDataDirMigrationIsIdempotentAndNeverOverwritesNewData(t *testing.T) {
+	root := t.TempDir()
+	legacyDir := filepath.Join(root, "codex-window-reset")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "config.json"), []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	first := resolveDataDir(root)
+	if got, err := os.ReadFile(filepath.Join(first, "config.json")); err != nil || string(got) != "legacy" {
+		t.Fatalf("first migration = %q, %v", got, err)
+	}
+
+	// Simulate the Operator saving new configuration after the migration.
+	if err := os.WriteFile(filepath.Join(first, "config.json"), []byte("current"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A later reinstall recreates the legacy directory with a stale copy of
+	// old data next to the freshly extracted binary; it must never win.
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "config.json"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second := resolveDataDir(root)
+	if second != first {
+		t.Fatalf("data dir changed across calls: %s vs %s", first, second)
+	}
+	if got, err := os.ReadFile(filepath.Join(second, "config.json")); err != nil || string(got) != "current" {
+		t.Fatalf("current data was overwritten by a later reinstall: %q, %v", got, err)
+	}
+}
+
 // Optional fixture export lets browser acceptance use the actual embedded Go
 // response, including the linker-injected version and single-page bundling.
 func TestExportEmbeddedPanelForBrowser(t *testing.T) {

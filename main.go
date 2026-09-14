@@ -213,9 +213,69 @@ func newRuntime(api host.API, dataDir string) (*app.Runtime, error) {
 // an environment variable or persisting a host credential in configuration.
 func defaultDataDir() string {
 	if info, err := os.Stat("/CLIProxyAPI/plugins"); err == nil && info.IsDir() {
-		return "/CLIProxyAPI/plugins/codex-window-reset"
+		return resolveDataDir("/CLIProxyAPI/plugins")
 	}
-	return filepath.Join("plugins", "codex-window-reset")
+	return resolveDataDir("plugins")
+}
+
+// resolveDataDir returns a data directory that is a sibling of, not the same
+// directory as, this plugin's own installed files. CLIProxyAPI's plugin
+// store owns <pluginsRoot>/codex-window-reset/ as the plugin's install
+// location and can recreate it on reinstall or upgrade; earlier releases
+// persisted config.json, runtime-state.json, history.json, and
+// reset-audit.json inside that same directory, so every plugin-store
+// reinstall silently destroyed the Operator's schedule, runtime state, and
+// Reset Audit history. dataDirSuffix keeps the new location deterministic
+// and free of that collision. migrateLegacyDataDir moves any files an
+// existing installation already wrote under the old path so upgrading to
+// this fix does not itself look like data loss.
+const dataDirSuffix = "-data"
+
+func resolveDataDir(pluginsRoot string) string {
+	legacyDir := filepath.Join(pluginsRoot, "codex-window-reset")
+	dataDir := legacyDir + dataDirSuffix
+	migrateLegacyDataDir(legacyDir, dataDir)
+	return dataDir
+}
+
+var legacyDataFiles = []string{"config.json", "runtime-state.json", "history.json", "reset-audit.json"}
+
+func migrateLegacyDataDir(legacyDir, dataDir string) {
+	if legacyDir == "" || dataDir == "" || legacyDir == dataDir {
+		return
+	}
+	if !dirHasAnyFile(legacyDir, legacyDataFiles) {
+		return
+	}
+	if dirNonEmpty(dataDir) {
+		// The new directory already has its own state (a completed prior
+		// migration, or a fresh install); never overwrite it.
+		return
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return
+	}
+	for _, name := range legacyDataFiles {
+		src := filepath.Join(legacyDir, name)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		_ = os.Rename(src, filepath.Join(dataDir, name))
+	}
+}
+
+func dirHasAnyFile(dir string, names []string) bool {
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func dirNonEmpty(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	return err == nil && len(entries) > 0
 }
 
 //export cliproxy_plugin_init
