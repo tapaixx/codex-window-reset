@@ -201,55 +201,30 @@ function quotaCallBody(result) {
   return typeof body === 'string' ? JSON.parse(body) : body;
 }
 
-// Publish usage as soon as it arrives; optional reset details must not hide it.
-export async function refreshAccountQuotas(accounts, { onUpdate = () => {}, onProgress = () => {}, usageTimeoutMs = 15000, resetTimeoutMs = 5000 } = {}) {
-  // Disabled accounts are still readable credentials. Quota refresh is a
-  // diagnostic read and must not inherit probe/reset restrictions.
-  const queue = [...new Map(accounts.map((account) => [account.account_key, account])).values()];
+// Explicitly refresh quota through the plugin Runtime so the result is kept
+// in process memory and ordinary panel loads remain read-only.
+export async function refreshAccountQuotas(accounts, { onUpdate = () => {}, onProgress = () => {}, timeoutMs = 150000 } = {}) {
+  // Quota refresh is an explicit user action. Route it through the plugin so
+  // the Runtime owns the snapshot in its process-memory cache and subsequent
+  // panel loads can read it without contacting the upstream API again.
+  const queue = [...new Map((Array.isArray(accounts) ? accounts : []).map((account) => [account.account_key, account])).values()]
+    .filter((account) => String(account?.account_key || '').trim());
+  if (!queue.length) return { succeeded: 0, failed: 0, resetFailed: 0 };
+  const views = await request('/quota/refresh', {
+    method: 'POST',
+    timeoutMs,
+    body: { account_keys: queue.map((account) => account.account_key) },
+  });
+  const byKey = new Map((Array.isArray(views) ? views : []).map((view) => [view?.snapshot?.account_key || view?.account_key, view]));
   const counts = { succeeded: 0, failed: 0, resetFailed: 0 };
-  let cursor = 0;
-  async function worker() {
-    while (cursor < queue.length) {
-      const account = queue[cursor++];
-      const accountKey = account.account_key;
-      const call = async (suffix, timeoutMs) => quotaCallBody(await hostManagementRequest('/api-call', {
-        method: 'POST', timeoutMs,
-        body: createCodexApiCall({ authIndex: account.auth_index, accountId: account.account_id,
-          url: `https://chatgpt.com/backend-api/wham/${suffix}`,
-          headers: { Accept: 'application/json', ...(suffix === 'usage' ? {} : { 'OpenAI-Beta': 'codex-1', Originator: 'Codex Desktop' }) },
-        }),
-      }));
-      let usage, capturedAt, view;
-      try {
-        if (!account.auth_index) throw new Error('账号缺少 auth_index');
-        usage = await call('usage', usageTimeoutMs);
-        capturedAt = Date.now();
-        const normalized = normalizeCodexQuota(usage, { capturedAt });
-        if (!normalized.windows.length) throw new Error('额度接口未返回可识别窗口');
-        view = { stale: false, refresh_error_code: '', reset_refresh_pending: true,
-          snapshot: { account_key: accountKey, captured_at: new Date(capturedAt).toISOString(), ...normalized } };
-      } catch (error) {
-        counts.failed++;
-        onUpdate({ accountKey, phase: 'failed', error });
-        onProgress({ ...counts, total: queue.length });
-        continue;
-      }
-      onUpdate({ accountKey, phase: 'usage', view });
-      try {
-        const resetPayload = await call('rate-limit-reset-credits', resetTimeoutMs);
-        const normalized = normalizeCodexQuota(usage, { capturedAt, resetPayload });
-        if (!normalized.reset_info_complete) throw new Error('未返回可识别的重置次数');
-        view = { ...view, snapshot: { ...view.snapshot, ...normalized } };
-      } catch (error) {
-        counts.resetFailed++;
-        view = { ...view, reset_refresh_error: requestErrorMessage(error) };
-      }
-      counts.succeeded++;
-      onUpdate({ accountKey, phase: 'complete', view: { ...view, reset_refresh_pending: false } });
-      onProgress({ ...counts, total: queue.length });
-    }
+  for (const account of queue) {
+    const accountKey = account.account_key;
+    const view = byKey.get(accountKey) || { account_key: accountKey, refresh_error_code: 'quota_refresh_failed', snapshot: { account_key: accountKey } };
+    if (view.refresh_error_code) counts.failed++;
+    else counts.succeeded++;
+    onUpdate({ accountKey, phase: 'complete', view });
+    onProgress({ ...counts, total: queue.length });
   }
-  await Promise.all(Array.from({ length: Math.min(3, queue.length) }, () => worker()));
   return counts;
 }
 

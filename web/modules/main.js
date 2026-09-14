@@ -95,7 +95,7 @@ function bootPanel() {
       const reset = document.createElement('button'); reset.className = 'secondary-button'; reset.type = 'button'; reset.textContent = '重置'; reset.dataset.rowAction = 'reset'; reset.disabled = !isResetQuotaEligible(account, quota[model.key]); reset.addEventListener('click', () => openReset(account, quota[model.key])); actions.append(refresh, reset);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
       const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
-      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('AUTH INDEX', model.authIndex, 'mono'), createCell('账号前缀', model.accountPrefix, 'mono'), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('请求结果', record.request_outcome || '--'), createCell('窗口结果', record.window_outcome || '--'), createCell('HTTP / 耗时', record.http_status ? `${record.http_status} / ${record.latency_ms || 0} ms` : '--'), createCell('快照时间', `${formatDate(snapshot.captured_at)}${quota[model.key]?.stale ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
+      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('AUTH INDEX', model.authIndex, 'mono'), createCell('账号前缀', model.accountPrefix, 'mono'), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('请求结果', record.request_outcome || '--'), createCell('窗口结果', record.window_outcome || '--'), createCell('HTTP / 耗时', record.http_status ? `${record.http_status} / ${record.latency_ms || 0} ms` : '--'), createCell('额度更新时间', `${formatDate(snapshot.captured_at)}${(quota[model.key]?.stale || quota[model.key]?.refresh_error_code) ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
       const credit = quota[model.key];
       if (credit?.reset_refresh_pending) row.children[9].textContent = '获取重置次数中…';
       else if (credit?.reset_refresh_error) { row.children[9].textContent = '重置次数暂不可用'; row.children[9].title = credit.reset_refresh_error; }
@@ -291,15 +291,16 @@ function bootPanel() {
 
   async function refreshQuotaSnapshots(keys) {
     const accounts = keys.map((key) => state.accounts.find((account) => account.account_key === key)).filter(Boolean);
-    text('#account-feedback', `正在刷新 ${accounts.length} 个账号；额度返回后逐项显示。`);
+    text('#account-feedback', `正在刷新 ${accounts.length} 个账号；结果返回后写入插件缓存。`);
+    // The plugin now returns every account's result in one response, so
+    // onUpdate fires synchronously for the whole batch rather than trickling
+    // in over time. Merge into state without re-rendering the account table
+    // on every iteration; withQuotaRefresh renders once after this resolves.
+    const merged = quotaIndex();
     return refreshAccountQuotas(accounts, {
-      onUpdate: ({ accountKey, view, error }) => {
-        const merged = quotaIndex();
-        merged[accountKey] = error ? { ...merged[accountKey], account_key: accountKey, stale: true, refresh_error_code: requestErrorMessage(error) } : view;
-        state.quota = Object.values(merged); renderAccounts();
-      },
+      onUpdate: ({ accountKey, view }) => { merged[accountKey] = view; },
       onProgress: ({ succeeded, failed, total }) => text('#account-feedback', `额度刷新 ${succeeded + failed}/${total} · 成功 ${succeeded}，失败 ${failed}`),
-    });
+    }).then((outcome) => { state.quota = Object.values(merged); return outcome; });
   }
 
   function reportQuotaRefresh(outcome, skipped = 0) {

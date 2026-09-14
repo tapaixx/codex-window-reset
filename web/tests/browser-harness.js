@@ -42,8 +42,8 @@ async function checkUIAudit(mode) {
     const before = (await fixtureState()).quotaRefreshRequests.length;
     await refresh();
     const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
-    assert(requests.some((r) => r.auth_index === 'revived') && requests.some((r) => r.auth_index === 'new'), 're-enabled/new credentials were not refreshed');
-    assert(requests.some((r) => r.auth_index === 'disabled'), 'disabled credential was not refreshed');
+    assert(requests.some((r) => r.account_keys?.includes('acct-revived')) && requests.some((r) => r.account_keys?.includes('acct-new')), 're-enabled/new credentials were not refreshed');
+    assert(requests.some((r) => r.account_keys?.includes('acct-disabled')), 'disabled credential was not refreshed');
     assert($('#accounts-table [data-account-key="acct-revived"]').textContent.includes('80%'), 'successful quota lost when another account fails');
     assert($('#accounts-table [data-account-key="acct-browser"]').textContent.includes('已过期'), 'failed quota was not marked stale');
     assert($('[data-account-selection="acct-browser"]').checked, 'manual selection was lost');
@@ -51,14 +51,18 @@ async function checkUIAudit(mode) {
     assert(/失败\s*1/.test($('#account-feedback').textContent), 'partial failure summary missing');
     assert(!$('#feedback').textContent.includes('刷新全部额度'), 'partial failure falsely announced total success');
   } else if (mode === 'audit-refresh-progress') {
-    await configure({ resetDelay: 1500 });
+    // Quota refresh is now one plugin round trip that returns usage and
+    // reset-credit data together, so there is no separate pending phase to
+    // observe; the invariant worth guarding is that the UI stays inert while
+    // the single request is outstanding and updates atomically once it lands.
+    await configure({ refreshDelay: 1500 });
     $('[data-action="refresh-all-quota"]').click();
-    await waitFor(() => $('#accounts-table').textContent.includes('80%'), 'usage remained hidden behind reset detail');
-    assert($('[data-action="refresh-all-quota"]').disabled, 'reset details did not remain pending');
-    assert($('#accounts-table').textContent.includes('获取重置次数中'), 'reset detail pending state missing');
-    assert($('[data-row-action="reset"]').disabled, 'reset was enabled before current reset credits arrived');
-    await waitFor(() => !$('[data-action="refresh-all-quota"]').disabled, 'refresh did not finish');
-    assert(!$('#accounts-table').textContent.includes('获取重置次数中'), 'reset pending state never cleared');
+    assert($('[data-action="refresh-all-quota"]').disabled, 'refresh button did not disable while the request is outstanding');
+    assert($('[data-row-action="reset"]').disabled, 'reset was enabled before quota arrived');
+    assert(!$('#accounts-table').textContent.includes('80%'), 'usage appeared before the plugin response arrived');
+    await waitFor(() => $('#accounts-table').textContent.includes('80%'), 'usage did not appear after refresh completed');
+    assert(!$('[data-action="refresh-all-quota"]').disabled, 'refresh did not finish');
+    assert(!$('#accounts-table').textContent.includes('获取重置次数中'), 'obsolete two-phase pending state leaked into the single-shot refresh');
   } else if (mode === 'audit-background-refresh') {
     await configure({ quotaDelay: 1600, historyDelay: 1600 });
     $('[data-action="refresh-panel"]').click();
@@ -89,7 +93,7 @@ async function checkUIAudit(mode) {
     await configure({ files: [file('disabled', true)] });
     const before = (await fixtureState()).quotaRefreshRequests.length; await refresh();
     const requests = (await fixtureState()).quotaRefreshRequests.slice(before);
-    assert(requests.some((r) => r.auth_index === 'disabled'), 'disabled account was not refreshed');
+    assert(requests.some((r) => r.account_keys?.includes('acct-disabled')), 'disabled account was not refreshed');
     assert(!/没有可刷新的已启用账号/.test($('#account-feedback').textContent), 'disabled account was incorrectly reported as skipped');
   } else if (mode === 'audit-refresh-failure') {
     await configure({ failAuthIndexes: ['browser'] }); await refresh();

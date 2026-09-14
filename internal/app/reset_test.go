@@ -41,6 +41,22 @@ func TestResetPersistsPendingBeforeConsumeAndReplaysOutcome(t *testing.T) {
 	}
 }
 
+func TestResetQuotaBoundsStalledPreConsumeRefresh(t *testing.T) {
+	previousTimeout := quotaRefreshTimeout
+	quotaRefreshTimeout = 20 * time.Millisecond
+	defer func() { quotaRefreshTimeout = previousTimeout }()
+	fx := newResetFixture(t)
+	fx.quota.refreshRelease = make(chan struct{})
+
+	_, err := fx.runtime.ResetQuota(context.Background(), "acct-a", resetKeyA)
+	if domain.CodeOf(err) != domain.CodeQuotaRefreshFailed {
+		t.Fatalf("error code = %q, want %q (%v)", domain.CodeOf(err), domain.CodeQuotaRefreshFailed, err)
+	}
+	if fx.quota.ResetCalls() != 0 {
+		t.Fatalf("upstream consume must not run before a stalled pre-consume refresh resolves, calls=%d", fx.quota.ResetCalls())
+	}
+}
+
 func TestResetRejectsIdempotencyReuseForDifferentAccount(t *testing.T) {
 	fx := newResetFixture(t)
 	if _, err := fx.runtime.ResetQuota(context.Background(), "acct-a", resetKeyA); err != nil {
@@ -456,21 +472,30 @@ type resetFixture struct {
 }
 
 type resetQuotaFixture struct {
-	mu            sync.Mutex
-	snapshots     map[string]domain.UsageSnapshot
-	refreshCalls  int
-	resetCalls    int
-	resetResult   domain.ResetHTTPResult
-	resetErr      error
-	OnReset       func()
-	BeforeConsume func(context.Context) error
+	mu             sync.Mutex
+	snapshots      map[string]domain.UsageSnapshot
+	refreshCalls   int
+	resetCalls     int
+	resetResult    domain.ResetHTTPResult
+	resetErr       error
+	refreshRelease chan struct{}
+	OnReset        func()
+	BeforeConsume  func(context.Context) error
 }
 
-func (q *resetQuotaFixture) Refresh(_ context.Context, account accounts.Account) (domain.UsageSnapshot, error) {
+func (q *resetQuotaFixture) Refresh(ctx context.Context, account accounts.Account) (domain.UsageSnapshot, error) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.refreshCalls++
 	snapshot := q.snapshots[normalizeKey(account.Key)]
+	release := q.refreshRelease
+	q.mu.Unlock()
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return snapshot, ctx.Err()
+		}
+	}
 	if snapshot.AccountKey == "" {
 		snapshot.AccountKey = normalizeKey(account.Key)
 	}

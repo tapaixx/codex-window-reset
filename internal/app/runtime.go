@@ -537,6 +537,9 @@ func (r *Runtime) ClearHistory() error {
 
 // ListQuota returns only cached quota views. It discovers account identities
 // through the host metadata boundary but never performs an upstream refresh.
+// Identity freshness only needs to be good enough to enumerate keys here, so
+// this reuses ListAccounts' short-lived cache instead of forcing its own host
+// round trip on every panel load.
 func (r *Runtime) ListQuota(ctx context.Context) ([]domain.SnapshotView, error) {
 	if r == nil || r.deps.Accounts == nil || r.deps.Quota == nil {
 		return nil, context.Canceled
@@ -544,7 +547,7 @@ func (r *Runtime) ListQuota(ctx context.Context) ([]domain.SnapshotView, error) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	accountsList, err := r.deps.Accounts.List(ctx)
+	accountsList, err := r.ListAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}

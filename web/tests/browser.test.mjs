@@ -360,7 +360,11 @@ async function serveManagementFixture(request, response, path, state) {
       if (request.method === 'POST' && path.endsWith('/quota/refresh')) {
     const body = await requestBody(request);
     state.quotaRefreshRequests.push(body);
-    jsonResponse(response, 200, { ok: true, result: [quotaView()] });
+    if (state.controls?.refreshDelay) await new Promise((resolve) => setTimeout(resolve, state.controls.refreshDelay));
+    const keys = Array.isArray(body?.account_keys) ? body.account_keys : [];
+    const failing = new Set((state.controls?.failAuthIndexes || []).map((authIndex) => `acct-${authIndex}`));
+    const result = keys.map((key) => (failing.has(key) ? failedQuotaView(key) : quotaView(key)));
+    jsonResponse(response, 200, { ok: true, result });
         return;
       }
       if (request.method === 'POST' && path === '/v0/management/api-call') {
@@ -384,17 +388,25 @@ async function serveManagementFixture(request, response, path, state) {
   jsonResponse(response, 404, { ok: false, error: { code: 'not_found', message: 'not found' } });
 }
 
-function quotaView() {
+function quotaView(accountKey = 'acct-browser') {
   return {
     stale: false,
     refresh_error_code: '',
     snapshot: {
-      account_key: 'acct-browser',
+      account_key: accountKey,
       captured_at: new Date().toISOString(),
       reset_info_complete: true,
       reset_applicable_count: 2,
       windows: [{ short: true, duration_minutes: 60, remaining_percent: 80 }],
     },
+  };
+}
+
+function failedQuotaView(accountKey) {
+  return {
+    stale: true,
+    refresh_error_code: 'quota_refresh_failed',
+    snapshot: { account_key: accountKey, captured_at: new Date().toISOString(), reset_info_complete: false, windows: [] },
   };
 }
 

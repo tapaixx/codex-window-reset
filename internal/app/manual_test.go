@@ -30,14 +30,17 @@ type task7Timer struct{}
 func (task7Timer) Stop() bool { return true }
 
 type task7AccountService struct {
-	mu       sync.Mutex
-	accounts map[string]accounts.Account
-	failList bool
+	mu        sync.Mutex
+	accounts  map[string]accounts.Account
+	failList  bool
+	listCalls int
+	findCalls int
 }
 
 func (s *task7AccountService) List(context.Context) ([]accounts.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.listCalls++
 	if s.failList {
 		return nil, errors.New("account discovery unavailable")
 	}
@@ -46,6 +49,12 @@ func (s *task7AccountService) List(context.Context) ([]accounts.Account, error) 
 		result = append(result, account)
 	}
 	return result, nil
+}
+
+func (s *task7AccountService) ListCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listCalls
 }
 
 func TestSimulationDoesNotBlockOnAccountRediscovery(t *testing.T) {
@@ -66,11 +75,18 @@ func TestSimulationDoesNotBlockOnAccountRediscovery(t *testing.T) {
 func (s *task7AccountService) Find(_ context.Context, key string) (accounts.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.findCalls++
 	account, ok := s.accounts[normalizeKey(key)]
 	if !ok {
 		return accounts.Account{}, errors.New("missing account")
 	}
 	return account, nil
+}
+
+func (s *task7AccountService) FindCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.findCalls
 }
 
 func (s *task7AccountService) Set(account accounts.Account) {
@@ -191,6 +207,9 @@ func (q *task7Quota) Refresh(ctx context.Context, account accounts.Account) (dom
 	q.mu.Lock()
 	q.refreshActive--
 	q.mu.Unlock()
+	if ctx.Err() != nil {
+		return snapshot, ctx.Err()
+	}
 	if err != nil {
 		return snapshot, err
 	}
@@ -553,6 +572,53 @@ func TestRefreshQuotasUsesThreeWorkersAndPreservesOrder(t *testing.T) {
 	}
 }
 
+func TestListQuotaReusesAccountDiscoveryCache(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+	fx.quota.snapshots["a"] = domain.UsageSnapshot{AccountKey: "a"}
+
+	before := fx.accounts.ListCalls()
+	if _, err := fx.runtime.ListQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.runtime.ListQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Every panel load calls GET /quota; without reusing ListAccounts' 5-second
+	// cache, each call forces its own full host account discovery even though
+	// nothing changed between them.
+	if got := fx.accounts.ListCalls() - before; got != 1 {
+		t.Fatalf("account discovery calls = %d, want 1 across two ListQuota calls within the cache window", got)
+	}
+}
+
+func TestRefreshQuotasDiscoversAccountsOnceForTheWholeBatch(t *testing.T) {
+	accountsList := task7Accounts(5)
+	fx := newTask7Fixture(t, accountsList...)
+	defer fx.runtime.Stop()
+	for _, account := range accountsList {
+		fx.quota.snapshots[account.Key] = domain.UsageSnapshot{AccountKey: account.Key}
+	}
+	keys := make([]string, 0, len(accountsList))
+	for _, account := range accountsList {
+		keys = append(keys, account.Key)
+	}
+	listBefore, findBefore := fx.accounts.ListCalls(), fx.accounts.FindCalls()
+	if _, err := fx.runtime.RefreshQuotas(context.Background(), keys); err != nil {
+		t.Fatal(err)
+	}
+	// The production accounts.Service.Find re-lists every credential on the
+	// host, so calling it once per account (as this code used to) turns an
+	// N-account refresh into N full host listings. Refreshing a batch must
+	// call List exactly once up front and never call Find per account.
+	if got := fx.accounts.ListCalls() - listBefore; got != 1 {
+		t.Fatalf("account discovery calls = %d, want 1 for a %d-account batch", got, len(keys))
+	}
+	if got := fx.accounts.FindCalls() - findBefore; got != 0 {
+		t.Fatalf("per-account Find calls = %d, want 0 for a %d-account batch", got, len(keys))
+	}
+}
+
 func TestRefreshQuotasRejectsEmptyAndDuplicateKeys(t *testing.T) {
 	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
 	defer fx.runtime.Stop()
@@ -560,6 +626,53 @@ func TestRefreshQuotasRejectsEmptyAndDuplicateKeys(t *testing.T) {
 		if _, err := fx.runtime.RefreshQuotas(context.Background(), keys); domain.CodeOf(err) != domain.CodeConfigInvalid {
 			t.Fatalf("keys=%v err=%v", keys, err)
 		}
+	}
+}
+
+func TestRefreshQuotasBoundsStalledUpstreamRefresh(t *testing.T) {
+	previousTimeout := quotaRefreshTimeout
+	quotaRefreshTimeout = 20 * time.Millisecond
+	defer func() { quotaRefreshTimeout = previousTimeout }()
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+	fx.quota.refreshRelease = make(chan struct{})
+	views, err := fx.runtime.RefreshQuotas(context.Background(), []string{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 || views[0].RefreshErrorCode != domain.CodeQuotaRefreshFailed {
+		t.Fatalf("stalled refresh view = %#v", views)
+	}
+}
+
+func TestManualProbeSurvivesStalledQuotaRefresh(t *testing.T) {
+	previousTimeout := quotaRefreshTimeout
+	quotaRefreshTimeout = 20 * time.Millisecond
+	defer func() { quotaRefreshTimeout = previousTimeout }()
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+	fx.quota.refreshRelease = make(chan struct{})
+
+	runID, err := fx.runtime.StartManualProbes(context.Background(), []string{"a"}, false)
+	if err != nil || runID == "" {
+		t.Fatalf("%q %v", runID, err)
+	}
+	fx.probes.ReleaseAll()
+	fx.runtime.mu.RLock()
+	run := fx.runtime.run
+	fx.runtime.mu.RUnlock()
+
+	select {
+	case <-run.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("manual probe hung on a stalled before/after quota refresh instead of timing out")
+	}
+	if got := fx.probes.Calls(); got != 1 {
+		t.Fatalf("probe calls = %d, want 1", got)
+	}
+	records := fx.history.Records()
+	if len(records) != 1 || records[0].RequestOutcome != domain.RequestSucceeded {
+		t.Fatalf("history = %#v", records)
 	}
 }
 

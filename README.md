@@ -21,7 +21,7 @@ single-page and reuses CLIProxyAPI's existing authentication and persistence.
 ## 运行要求与安全 / Requirements and security
 
 插件不自建登录，不保存 management key，默认遮罩账户身份。账户来自
-`/v0/management/auth-files`，配额查询通过 `/v0/management/api-call`。
+`/v0/management/auth-files`；显式额度刷新通过插件的 `/quota/refresh` 写入内存，普通展示读取 `/quota`。
 
 Use a CLIProxyAPI installation that supports native plugins, with a matching
 Linux `amd64` or `arm64` host. Production Go uses only the standard library.
@@ -171,9 +171,12 @@ same credit twice.
 There is no page-open or interval quota polling. Two deliberately separate
 snapshot paths exist:
 
-- The panel calls CLIProxyAPI `/v0/management/api-call` only for an explicit
-  quota refresh and after a confirmed Reset. These display snapshots live only
-  in page memory and disappear on reload.
+- The panel calls the plugin's `POST /quota/refresh` only for an explicit quota
+  refresh and after a confirmed Reset. The plugin performs the host request,
+  stores the resulting display snapshot in process memory, and serves it from
+  `GET /quota` on subsequent panel loads; the snapshot includes its capture
+  time and disappears only when the plugin process restarts or history is
+  explicitly cleared.
 - The plugin runtime refreshes its own decision snapshot immediately before
   and after a Probe, Preheat Request, or Quota Reset. Runtime snapshots stay in
   memory and become stale exactly five minutes after capture.

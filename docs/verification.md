@@ -1,5 +1,80 @@
 # Release verification evidence
 
+## 批量额度刷新与账号列表加载的性能修复（当前修复）
+
+2026-09-13：复查“页面首次启动、模拟器首次启动、各种调用”的性能问题，发现两处
+真实的冗余账号发现调用，以及一处冗余前端重绘：
+
+- `internal/accounts.Service` 按设计不缓存（每次 `List`/`Find` 都重新调用宿主
+  `ListAuthFiles`），但 `RefreshQuotas` 里每个账号的 worker 各自调用一次
+  `Accounts.Find`（内部等价于整表 `List`），把一次 N 账号的批量刷新变成 N 次
+  整表账号发现——账号越多越明显。修复为整批共享一次 `Accounts.List`，按 key
+  在内存里查找，不再逐账号重新发现；已改用 `TestRefreshQuotasDiscoversAccountsOnceForTheWholeBatch`
+  验证批量刷新只调用一次 `List`、零次 `Find`。
+- `Runtime.ListAccounts`（`GET /accounts` 使用）已经有 5 秒内存缓存，但
+  `ListQuota`（面板首次加载调用的 `GET /quota`）绕开了这个缓存，直接调用
+  `Accounts.List`，导致短时间内重复加载面板或轮询状态时反复触发整表账号发现。
+  改为复用 `ListAccounts` 的缓存；`TestListQuotaReusesAccountDiscoveryCache`
+  验证 5 秒窗口内连续两次 `ListQuota` 只触发一次账号发现。手动检测
+  （`StartManualProbes`）与窗口重置仍然保持绕开缓存，因为它们在执行真实操作前
+  需要最新的禁用/不可用状态，不适合和展示型读取共用短期缓存。
+- 额度快照写入插件内存的修复把批量刷新从“逐账号流式到达”改成“一次请求拿到
+  整批结果”，但 `main.js` 的 `onUpdate` 回调仍在循环里对每个账号各调用一次
+  `renderAccounts()`（重建整张账号表，且每行都要对 `state.history` 做一次
+  filter+sort）。数据其实是同一时刻一起到达的，循环内的中间重绘完全是浪费——
+  `withQuotaRefresh` 结束时已经会统一重绘一次。改为循环内只合并数据，重绘只在
+  最外层做一次。
+
+两处后端修复都先在临时改回旧实现后确认对应新测试会失败，再验证修复后通过，
+避免测试形同虚设；`internal/accounts.Service` 的“不缓存”设计本身未改动，只是
+避免在同一次调用里为同一批数据重复触发它。
+
+## 补齐手动检测与窗口重置的额度刷新超时（当前修复）
+
+2026-09-13：额度快照写入插件内存的修复只给批量“刷新额度”接口加了 15 秒上限，
+手动健康检测（`executeManual`）探测前后各一次的额度刷新、以及窗口重置
+（`ResetQuota`）消费额度前后各一次的额度刷新仍直接复用调用方 `ctx`，没有独立
+超时——与 v0.0.18 已经修复的自动预热路径是同一类根因，但只覆盖了三条调用路径
+中的一条。上游额度接口卡住时，手动检测或重置请求会无限期挂起。
+
+现在这两条路径的额度刷新都套用与批量刷新相同的 `quotaRefreshTimeout`（15 秒）。
+
+回归证据：`TestManualProbeSurvivesStalledQuotaRefresh` 验证卡住的探测前/后
+额度刷新不会阻塞探测本身，运行在限定时间内完成并写入历史记录；
+`TestResetQuotaBoundsStalledPreConsumeRefresh` 验证消费额度前的刷新卡住时，
+重置请求会在限定时间内失败，且不会误触发上游消费调用。两个测试都先在移除
+超时包装的情况下确认会挂起超时失败，再验证修复后通过。
+
+## 批量额度刷新迁移到插件缓存路由后修复浏览器回归测试（当前修复）
+
+2026-09-13：额度快照写入插件内存的修复把 `refreshAccountQuotas` 从“逐账号并发
+调用宿主 `/api-call`”改成“一次性调用插件 `POST /quota/refresh`”，但配套的
+`web/tests/browser.test.mjs` 夹具服务器和 `audit-refresh*` 断言仍假设旧的按
+`auth_index` 逐个请求、且额外有“先返回用量再返回重置次数”的两阶段进度状态。
+四个浏览器回归测试（`audit-refresh`、`audit-refresh-empty`、
+`audit-refresh-failure`、`audit-refresh-progress`）因此失败：夹具的
+`/quota/refresh` 处理器忽略请求体、恒定返回同一个成功快照，从不模拟失败或按
+账号区分结果。
+
+修复：夹具按真实契约解析 `account_keys` 并按 `failAuthIndexes` 逐账号返回
+成功或失败视图；`audit-refresh-progress` 改为验证单次请求期间面板保持不可用、
+不会再出现已废弃的“获取重置次数中”两阶段状态。同时补上一个真实产品缺陷——
+`main.js` 渲染“额度更新时间”列时只看 `stale` 字段，而新的单次刷新失败视图
+不再触发前端自造的 `stale: true`，导致失败账号不会显示“已过期”；现在同时检查
+`refresh_error_code`。
+
+## 额度快照写入插件内存（当前修复）
+
+2026-09-13：发现面板的手动刷新虽然显示了新额度，却直接从浏览器调用宿主管理
+`/api-call`，结果只存在页面状态；重新打开插件时只能看到空额度。现在手动刷新
+统一调用插件 `POST /quota/refresh`，由 Runtime 写入进程内快照，打开面板的
+`GET /quota` 只读该缓存；表格显示快照实际获取时间。停用账号仍包含在刷新请求中。
+每个后台账号刷新增加 15 秒上限，避免上游卡住拖垮整批刷新。
+
+回归证据：`web/tests/quota-refresh.test.mjs` 验证刷新只发插件缓存路由、包含停用
+账号并逐账号报告失败；`TestRefreshQuotasBoundsStalledUpstreamRefresh` 验证卡住的
+后台请求会在限定时间内返回失败视图。
+
 ## v0.0.15 额度刷新等待与错峰批次分组
 
 2026-09-13：用户报告额度长时间无法刷新，同一轮随机错峰预热被拆为多批。修复纳入 v0.0.15；发布说明见 [v0.0.15](releases/v0.0.15.md)。
@@ -8,7 +83,7 @@
 
 - 刷新逻辑先串行等待每个账号的用量和重置次数，再用 `Promise.allSettled` 等待所有账号；没有请求截止时间。一个慢请求可以阻止其他已成功用量显示。现在最多并发处理 3 个账号，用量一返回立即显示；单次用量请求 15 秒、重置详情 5 秒超时，失败账号保留旧快照并标记过期。详情失败不丢弃用量，也不开放重置按钮。
 - 后台面板加载期间，刷新按钮原本被 `panelLoading` 静默拦截。现在明确刷新可独立执行，并用请求代次避免稍后返回的缓存覆盖新额度；历史、审计等各自就绪即显示。
-- 前一轮账号缓存只在 Runtime.ListAccounts 中；页面直接访问宿主 `/auth-files`，而 ListQuota 直接调用 Accounts.List，所以不能据此声称首屏或额度刷新已去重。本轮修复的是可复现的前端等待链路，未测量用户真实宿主或上游网络延迟。
+- 账号发现仍通过宿主 `/auth-files`，但额度展示不再绕过 Runtime：`ListQuota` 只读取插件内存快照，显式刷新才进入 `RefreshQuotas`。
 - 自动记录的 occurrence_id 是 `日期/p时段/账号`。按完整 ID 分组会把同一时段的账号拆开。现在按 `日期/p时段` 分组，失败补偿归入原计划批次；手动任务按 run_id，不同日期、时段、手动任务不混合。无法识别批次的旧记录单独保留，不靠执行时间相近来猜测。
 
 ### 防复发与证据

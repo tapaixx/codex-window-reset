@@ -9,6 +9,10 @@ import (
 	"github.com/tapaixx/codex-window-reset/internal/domain"
 )
 
+// Manual quota refreshes are diagnostic reads, but an unreachable upstream
+// must not leave the management request (or its UI) waiting indefinitely.
+var quotaRefreshTimeout = 15 * time.Second
+
 // StartManualProbes starts one asynchronous bulk Health Probe run.  The
 // allowUnavailable flag is the explicit Operator override for host-reported
 // Unavailable accounts; Disabled accounts are never overridable.
@@ -137,6 +141,21 @@ func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.Sn
 	if err != nil {
 		return nil, err
 	}
+	// Discover accounts once for the whole batch instead of once per account.
+	// accounts.Service.Find re-lists every credential on the host, so calling
+	// it from each worker turned an N-account refresh into N full host
+	// listings; every account in this batch shares one point-in-time read.
+	byKey := make(map[string]accounts.Account, len(normalized))
+	if discovered, listErr := r.deps.Accounts.List(ctx); listErr == nil {
+		for _, account := range discovered {
+			key := normalizeKey(account.Key)
+			if key == "" {
+				continue
+			}
+			account.Key = key
+			byKey[key] = account
+		}
+	}
 	// Register every worker while holding Runtime.mu. Stop takes the same lock
 	// before entering wg.Wait, so it cannot observe a zero counter and return
 	// while a refresh worker is about to begin host I/O.
@@ -163,7 +182,9 @@ func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.Sn
 				r.wg.Done()
 			}()
 			for index := range jobs {
-				views[index] = r.refreshQuotaOne(ctx, normalized[index])
+				refreshCtx, cancel := context.WithTimeout(ctx, quotaRefreshTimeout)
+				views[index] = r.refreshQuotaOne(refreshCtx, normalized[index], byKey[normalized[index]])
+				cancel()
 			}
 		}()
 	}
@@ -186,9 +207,8 @@ func (r *Runtime) RefreshQuotas(ctx context.Context, keys []string) ([]domain.Sn
 	return views, nil
 }
 
-func (r *Runtime) refreshQuotaOne(ctx context.Context, key string) domain.SnapshotView {
-	account, err := r.deps.Accounts.Find(ctx, key)
-	if err != nil {
+func (r *Runtime) refreshQuotaOne(ctx context.Context, key string, account accounts.Account) domain.SnapshotView {
+	if account.Key == "" {
 		now := r.now()
 		if view, ok := r.deps.Quota.Get(key, now); ok {
 			if view.Snapshot.AccountKey == "" {
@@ -200,9 +220,8 @@ func (r *Runtime) refreshQuotaOne(ctx context.Context, key string) domain.Snapsh
 			}
 			return view
 		}
-		return failedSnapshotView(key, err, now)
+		return failedSnapshotView(key, nil, now)
 	}
-	account.Key = key
 	snapshot, refreshErr := r.refreshSnapshot(ctx, account)
 	now := r.now()
 	if refreshErr != nil {
@@ -342,7 +361,9 @@ func (r *Runtime) executeManual(ctx context.Context, runID string, account accou
 	defer r.releaseBusy(account.Key)
 
 	started := r.now()
-	before, _ := r.refreshSnapshot(ctx, account)
+	beforeCtx, beforeCancel := context.WithTimeout(ctx, quotaRefreshTimeout)
+	before, _ := r.refreshSnapshot(beforeCtx, account)
+	beforeCancel()
 	config := r.configSnapshot()
 	result := r.deps.Probe.Execute(ctx, account, config.ProbeModel, probeTimeout(config))
 	if result.Outcome == "" {
@@ -351,7 +372,9 @@ func (r *Runtime) executeManual(ctx context.Context, runID string, account accou
 			result.ErrorCode = domain.CodeProbeFailed
 		}
 	}
-	after, _ := r.refreshSnapshot(ctx, account)
+	afterCtx, afterCancel := context.WithTimeout(ctx, quotaRefreshTimeout)
+	after, _ := r.refreshSnapshot(afterCtx, account)
+	afterCancel()
 
 	record := operationBaseAt(r, domain.TriggerHealthProbe, "", account, started)
 	record.RunID = runID

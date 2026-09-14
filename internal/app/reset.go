@@ -94,7 +94,9 @@ func (r *Runtime) ResetQuota(ctx context.Context, accountKey, idempotencyKey str
 		r.finishResetFlight(idempotencyKey, audit, err)
 	}()
 
-	snapshot, refreshErr := r.deps.Quota.Refresh(flight.ctx, account)
+	refreshCtx, refreshCancel := context.WithTimeout(flight.ctx, quotaRefreshTimeout)
+	snapshot, refreshErr := r.deps.Quota.Refresh(refreshCtx, account)
+	refreshCancel()
 	if refreshErr != nil {
 		return domain.ResetAudit{}, appError(domain.CodeQuotaRefreshFailed, 502, true, "quota refresh failed")
 	}
@@ -125,7 +127,9 @@ func (r *Runtime) ResetQuota(ctx context.Context, accountKey, idempotencyKey str
 	}
 	// The refresh is deliberately unconditional after entering the upstream
 	// consume primitive, including definite HTTP failures.
-	_, _ = r.deps.Quota.Refresh(flight.ctx, account)
+	postRefreshCtx, postRefreshCancel := context.WithTimeout(flight.ctx, quotaRefreshTimeout)
+	_, _ = r.deps.Quota.Refresh(postRefreshCtx, account)
+	postRefreshCancel()
 
 	audit = pending
 	audit.FinishedAt = r.now()
