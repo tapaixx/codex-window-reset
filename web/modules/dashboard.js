@@ -15,8 +15,37 @@ export function groupHistoryBatches(history = []) {
   return [...groups.values()].map((batch) => {
     const starts = batch.records.map((record) => record.started_at || record.finished_at).filter((date) => Number.isFinite(Date.parse(date))).sort((a, b) => Date.parse(a) - Date.parse(b));
     const finishes = batch.records.map((record) => record.finished_at || record.started_at).filter((date) => Number.isFinite(Date.parse(date))).sort((a, b) => Date.parse(b) - Date.parse(a));
-    return { ...batch, accountCount: new Set(batch.records.map((record) => record.account_key || record.id)).size, startedAt: starts[0], finishedAt: finishes[0] };
+    // A batch where every account was skipped by design reads identically to a
+    // batch that failed, unless the count is stated up front.
+    const skipped = batch.records.filter((record) => !requestWasSent(record)).length;
+    return { ...batch, accountCount: new Set(batch.records.map((record) => record.account_key || record.id)).size, skipped, startedAt: starts[0], finishedAt: finishes[0] };
   }).sort((a, b) => (Date.parse(b.finishedAt) || 0) - (Date.parse(a.finishedAt) || 0));
+}
+
+// A record whose request outcome is "disabled" never reached the network: the
+// operation stopped at an eligibility or quota decision. That is a different
+// event from a request that was sent and failed, and the panel has to say so.
+export function requestWasSent(record = {}) {
+  const outcome = String(record.request_outcome || '');
+  return outcome !== '' && outcome !== 'disabled';
+}
+
+export function describeOperation(record = {}, labels = {}) {
+  const { probeOutcomes = {}, windowOutcomes = {}, decisions = {} } = labels;
+  const parts = [];
+  if (requestWasSent(record)) {
+    parts.push(`请求：${probeOutcomes[record.request_outcome] || record.request_outcome}`);
+    parts.push(`窗口：${windowOutcomes[record.window_outcome] || record.window_outcome || '--'}`);
+    parts.push(`HTTP ${record.http_status || '--'}`);
+    if (record.decision && record.decision !== 'proceed') parts.push(`判定：${decisions[record.decision] || record.decision}`);
+  } else {
+    parts.push('未发送请求');
+    if (record.decision) parts.push(decisions[record.decision] || record.decision);
+  }
+  // The guardrail error code repeats its own decision; anything else is new
+  // information and is kept.
+  if (record.error_code && record.error_code !== record.decision) parts.push(record.error_code);
+  return parts;
 }
 
 function latestRecord(history, key) {

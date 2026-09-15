@@ -175,6 +175,23 @@ async function checkUIAudit(mode) {
     // The longest state must not push the summary strip off screen.
     assert(document.documentElement.scrollWidth <= innerWidth + 1, `alarm line overflows the page: ${document.documentElement.scrollWidth} > ${innerWidth}`);
     assert($('#next-run').getBoundingClientRect().right <= innerWidth + 1, 'alarm line is clipped at the viewport edge');
+  } else if (mode === 'audit-skipped-batch') {
+    await configure({ history: [
+      { id: 'h1', trigger: 'preheat', occurrence_id: '2026-09-15/p1/acct-browser', account_key: 'acct-browser', masked_identity: 'b***@example.com', started_at: '2026-09-15T02:31:40Z', finished_at: '2026-09-15T02:31:41Z', request_outcome: 'disabled', window_outcome: 'not_observed', decision: 'sufficient_window', latency_ms: 0 },
+      { id: 'h2', trigger: 'preheat', occurrence_id: '2026-09-15/p1/acct-two', account_key: 'acct-two', masked_identity: 'a***@example.com', started_at: '2026-09-15T02:35:00Z', finished_at: '2026-09-15T02:35:01Z', request_outcome: 'disabled', window_outcome: 'not_observed', decision: 'guardrail_hold', error_code: 'guardrail_hold', latency_ms: 0 },
+    ] });
+    await reloadUntil(() => $('#history-output summary'), 'history batch not rendered');
+    const header = $('#history-output summary').textContent;
+    assert(header.includes('全部跳过，未发送请求'), `batch header does not state the skips: ${header}`);
+    $('#history-output details').open = true;
+    const items = $$('.history-batch-item').map((node) => node.textContent);
+    assert(items[0].includes('未发送请求') && items[0].includes('额度充足'), `skip reason missing: ${items[0]}`);
+    // The raw enum values and a fabricated HTTP/latency reading must be gone.
+    for (const leak of ['disabled', 'not_observed', 'HTTP', '0 ms']) {
+      assert(!items[0].includes(leak), `${leak} still shown for a skipped operation: ${items[0]}`);
+    }
+    assert(items[1].includes('Guardrail Hold'), `guardrail skip not named: ${items[1]}`);
+    assert(items[1].split('Guardrail Hold').length === 2, `guardrail reason stated twice: ${items[1]}`);
   } else if (mode === 'audit-account-status') {
     const cells = [...$('#accounts-table tr').children].map((cell) => cell.textContent.trim());
     // account_type is "oauth"; the tier lives in the id_token.

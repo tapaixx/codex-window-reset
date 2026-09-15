@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { accountStatusDetail, describeNextRun, groupHistoryBatches, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
+import { accountStatusDetail, describeNextRun, describeOperation, groupHistoryBatches, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -44,6 +44,7 @@ const formatDate = (value, fallback = '--') => {
 const formatDuration = (milliseconds) => milliseconds >= 1000 ? `${(milliseconds / 1000).toFixed(1)} 秒` : `${milliseconds || 0} ms`;
 
 const probeOutcomeLabels = { succeeded: '成功', unauthorized: '未授权', forbidden: '被拒绝', payment_required: '需付费', rate_limited: '被限流', upstream_error: '上游错误', network_error: '网络错误', timeout: '超时', response_error: '响应异常', unexpected_output: '输出异常', credential_error: '凭据错误', disabled: '已停用' };
+const decisionLabels = { proceed: '判定需要预热', sufficient_window: '额度充足，当前窗口仍有效', guardrail_hold: 'Guardrail Hold：长窗口余量过低', quota_unknown_fail_open: '额度未知，按放行处理' };
 const windowOutcomeLabels = { verified_started: '已开窗', already_active: '窗口已在', unchanged: '窗口未变', unverified: '未验证', not_observed: '未观察' };
 
 // One probe, one cell: the request outcome carries the colour, the window
@@ -343,9 +344,18 @@ function bootPanel() {
       const details = document.createElement('details'); details.dataset.batchKey = key; details.open = expanded.has(key);
       const summaryNode = document.createElement('summary');
       const period = batch.period ? ` · 计划时段 ${Number(batch.period.split('/p')[1]) + 1}` : '';
-      summaryNode.textContent = `${triggerLabels[batch.trigger] || batch.trigger}${period} · ${batch.accountCount} 个账号 · ${records.length} 次操作 · ${formatDate(batch.startedAt)} — ${formatDate(batch.finishedAt)}`;
+      const skipped = batch.skipped ? ` · ${batch.skipped === records.length ? '全部跳过，未发送请求' : `${batch.skipped} 次跳过`}` : '';
+      summaryNode.textContent = `${triggerLabels[batch.trigger] || batch.trigger}${period} · ${batch.accountCount} 个账号 · ${records.length} 次操作${skipped} · ${formatDate(batch.startedAt)} — ${formatDate(batch.finishedAt)}`;
       const list = document.createElement('div'); list.className = 'history-batch-details';
-      records.forEach((record) => { const item = document.createElement('div'); item.className = 'history-batch-item'; item.textContent = `${record.masked_identity || record.account_key} · ${formatDate(record.started_at)} · ${triggerLabels[record.trigger] || record.trigger} · 请求：${record.request_outcome || '--'} · 窗口：${record.window_outcome || '--'} · HTTP ${record.http_status || '--'} · ${formatDuration(record.latency_ms || 0)}${record.error_code ? ` · ${record.error_code}` : ''}`; list.append(item); });
+      records.forEach((record) => {
+        const item = document.createElement('div'); item.className = 'history-batch-item';
+        const detail = describeOperation(record, { probeOutcomes: probeOutcomeLabels, windowOutcomes: windowOutcomeLabels, decisions: decisionLabels });
+        const head = [record.masked_identity || record.account_key, formatDate(record.started_at), triggerLabels[record.trigger] || record.trigger];
+        // Latency is only meaningful for a request that was actually sent.
+        const tail = record.latency_ms ? [formatDuration(record.latency_ms)] : [];
+        item.textContent = [...head, ...detail, ...tail].join(' · ');
+        list.append(item);
+      });
       details.append(summaryNode, list); cell.append(details); summary.append(cell); body.append(summary);
     }
   }
