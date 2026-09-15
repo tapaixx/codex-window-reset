@@ -39,6 +39,37 @@ type UsageWindow struct {
 	Short            bool      `json:"short"`
 }
 
+// windowStartSlack absorbs clock skew between the snapshot's capture time and
+// the upstream's reset timestamp. A window that started less than this ago is
+// still treated as active.
+const windowStartSlack = 30 * time.Second
+
+// ActiveAt reports whether a usage window is actually running at the moment the
+// snapshot was captured.
+//
+// The upstream does not say "no window is open". For an idle account it reports
+// a full window that has not started: remaining 100% with reset_at exactly one
+// window duration ahead of the read, and that reset_at slides forward with
+// every read. Treating that as an open window is what made preheating
+// impossible — the only moment a preheat request can start a window is the
+// moment the account is idle, which is precisely when the placeholder appears.
+//
+// A genuinely running window started in the past, so strictly less than one
+// full duration remains before it resets.
+func (w UsageWindow) ActiveAt(capturedAt time.Time) bool {
+	if w.ResetAt.IsZero() || w.DurationMinutes <= 0 {
+		return false
+	}
+	if capturedAt.IsZero() {
+		return true
+	}
+	remaining := w.ResetAt.UTC().Sub(capturedAt.UTC())
+	if remaining <= 0 {
+		return false
+	}
+	return remaining+windowStartSlack < time.Duration(w.DurationMinutes)*time.Minute
+}
+
 func (w UsageWindow) MarshalJSON() ([]byte, error) {
 	type wire UsageWindow
 	value := wire(w)

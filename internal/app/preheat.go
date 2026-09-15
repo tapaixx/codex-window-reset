@@ -240,7 +240,8 @@ func fallbackDecision(r *Runtime, config domain.Config, key string, now time.Tim
 		}
 	}
 	short := snapshot.Windows[shortIndex]
-	if fresh && short.RemainingPercent >= config.RemainingQuotaFloorPercent &&
+	if fresh && short.ActiveAt(snapshot.CapturedAt) &&
+		short.RemainingPercent >= config.RemainingQuotaFloorPercent &&
 		!short.ResetAt.IsZero() &&
 		short.ResetAt.Sub(now.UTC()) >= time.Duration(config.RemainingWindowFloorMinutes)*time.Minute {
 		return domain.DecisionSufficientWindow
@@ -346,7 +347,11 @@ func classifyWindow(request domain.RequestOutcome, before, after *domain.UsageSn
 	if shortActive(before, beforeWindow) {
 		return domain.WindowAlreadyActive
 	}
-	if !beforeWindow.ResetAt.Equal(afterWindow.ResetAt) {
+	// The reset timestamp of an idle account slides forward with every read, so
+	// "before differs from after" is satisfied by the passage of time alone and
+	// cannot distinguish a preheat that opened a window from one that did not.
+	// A window is verified only when the account is actually running one now.
+	if shortActive(after, afterWindow) {
 		return domain.WindowVerifiedStarted
 	}
 	return domain.WindowUnchanged
@@ -368,7 +373,9 @@ func shortActive(snapshot *domain.UsageSnapshot, window domain.UsageWindow) bool
 		return false
 	}
 	if !snapshot.CapturedAt.IsZero() {
-		return window.ResetAt.After(snapshot.CapturedAt.UTC())
+		// A reset timestamp in the future is not evidence of an open window:
+		// an idle account reports one a full duration ahead of every read.
+		return window.ActiveAt(snapshot.CapturedAt)
 	}
 	// Lightweight fixtures often omit CapturedAt.  A non-zero remaining
 	// percentage is the only safe positive signal available in that shape.

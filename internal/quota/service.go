@@ -349,7 +349,13 @@ func decide(snapshot domain.SnapshotView, hold *domain.GuardrailHold, cfg domain
 		return domain.DecisionGuardrailHold
 	}
 	short, ok := shortestWindow(snapshot.Snapshot.Windows)
-	if !snapshot.Stale && ok && short.RemainingPercent >= cfg.RemainingQuotaFloorPercent && short.ResetAt.Sub(now.UTC()) >= time.Duration(cfg.RemainingWindowFloorMinutes)*time.Minute {
+	// Skipping requires a window that is actually running. An idle account
+	// reports a full unstarted window whose reset slides forward with every
+	// read, which satisfied both thresholds forever and skipped every preheat
+	// in exactly the situation a preheat exists for.
+	if !snapshot.Stale && ok && short.ActiveAt(snapshot.Snapshot.CapturedAt) &&
+		short.RemainingPercent >= cfg.RemainingQuotaFloorPercent &&
+		short.ResetAt.Sub(now.UTC()) >= time.Duration(cfg.RemainingWindowFloorMinutes)*time.Minute {
 		return domain.DecisionSufficientWindow
 	}
 	return domain.DecisionProceed
