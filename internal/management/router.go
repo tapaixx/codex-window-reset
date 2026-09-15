@@ -41,7 +41,7 @@ func (r *Router) Handle(request Request) Response {
 			Status:      200,
 			StatusCode:  200,
 			ContentType: contentType,
-			Headers:     map[string]string{"Content-Type": contentType},
+			Headers:     uncacheableHeaders(contentType),
 			Body:        append([]byte(nil), body...),
 		}
 	}
@@ -272,7 +272,7 @@ func successResponse(result any, correlationID string, status ...int) Response {
 		Status:      code,
 		StatusCode:  code,
 		ContentType: "application/json; charset=utf-8",
-		Headers:     map[string]string{"Content-Type": "application/json; charset=utf-8"},
+		Headers:     uncacheableHeaders("application/json; charset=utf-8"),
 		Body:        body,
 	}
 }
@@ -296,11 +296,29 @@ func errorResponseWithHeaders(err error, correlationID string, extra map[string]
 		body = []byte(`{"ok":false,"error":{"code":"store_corrupt","message":"management operation failed","retryable":true,"correlation_id":"` + correlationID + `"}}`)
 		status = 500
 	}
-	headers := map[string]string{"Content-Type": "application/json; charset=utf-8"}
+	headers := uncacheableHeaders("application/json; charset=utf-8")
 	for key, value := range extra {
 		headers[key] = value
 	}
 	return Response{Status: status, StatusCode: status, ContentType: "application/json; charset=utf-8", Headers: headers, Body: body}
+}
+
+// uncacheableHeaders marks every management response as never storable.
+//
+// Nothing this plugin serves can be reused: API responses are live state, and
+// the panel's markup and modules must match the build that is running. Without
+// an explicit header a CDN applies its own heuristics, and a cached panel keeps
+// serving an older UI after an upgrade — asset references that no longer
+// resolve render as a blank page, and cached API responses show state that has
+// already changed. Both look like plugin faults from the browser while the
+// origin is healthy.
+func uncacheableHeaders(contentType string) map[string]string {
+	return map[string]string{
+		"Content-Type":  contentType,
+		"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+		"Pragma":        "no-cache",
+		"Expires":       "0",
+	}
 }
 
 func managementError(err error) (domain.ErrorCode, string, bool, int) {
