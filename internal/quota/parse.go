@@ -234,7 +234,7 @@ func parseWindow(candidate windowCandidate, capturedAt time.Time, limitReached b
 	used, hasUsed := usagePercent(candidate.value)
 	resetAt := resetAtFromWindow(candidate.value, capturedAt)
 	if !hasUsed && limitReached && !resetAt.IsZero() {
-		if hasValue(candidate.value, "used_percent", "usedPercent", "used", "used_fraction", "usedFraction", "remaining_percent", "remainingPercent") {
+		if hasValue(candidate.value, "used_percent", "usedPercent", "used", "used_fraction", "usedFraction", "remaining_percent", "remainingPercent", "remaining_fraction", "remainingFraction") {
 			return domain.UsageWindow{}, 0, false
 		}
 		used, hasUsed = 100, true

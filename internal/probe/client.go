@@ -144,7 +144,14 @@ func (c *Client) Execute(ctx context.Context, account accounts.Account, model st
 	if err != nil {
 		return failedResultWithStatus(domain.RequestResponseError, response.StatusCode, false)
 	}
-	if strings.TrimSpace(text) != "OK" {
+	// A completed response is the operational fact this probe exists to
+	// establish: the request was processed, so the usage window is open no
+	// matter how the model worded its reply. ParseCompleted already rejects
+	// response.failed, response.incomplete and error events, so reaching here
+	// means a real completion. Requiring the text to be exactly "OK" made a
+	// preheat that had fully worked report as a failure as soon as a model
+	// added punctuation, changed case, or answered in another language.
+	if strings.TrimSpace(text) == "" {
 		return failedResultWithStatus(domain.RequestUnexpectedOutput, response.StatusCode, false)
 	}
 	return domain.ProbeResult{

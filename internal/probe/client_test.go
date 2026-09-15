@@ -144,7 +144,8 @@ func TestExecuteMapsTransportAndResponseFailures(t *testing.T) {
 		{name: "network error", httpErr: errors.New("connection refused"), want: domain.RequestNetworkError, retry: true},
 		{name: "caller cancellation", httpErr: context.Canceled, want: domain.RequestNetworkError},
 		{name: "malformed terminal JSON", body: "data: {\"type\":\"response.completed\"\n", want: domain.RequestResponseError},
-		{name: "unexpected output", body: `data: {"type":"response.output_text.done","text":"NOT OK"}` + "\ndata: {\"type\":\"response.completed\"}\n", want: domain.RequestUnexpectedOutput},
+		{name: "a differently worded completion still opened the window", body: `data: {"type":"response.output_text.done","text":"NOT OK"}` + "\ndata: {\"type\":\"response.completed\"}\n", want: domain.RequestSucceeded},
+		{name: "a completion with no text at all", body: `data: {"type":"response.output_text.done","text":"   "}` + "\ndata: {\"type\":\"response.completed\"}\n", want: domain.RequestUnexpectedOutput},
 	}
 
 	for _, tt := range tests {
