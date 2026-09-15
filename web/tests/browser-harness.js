@@ -189,9 +189,10 @@ async function checkUIAudit(mode) {
     $('[data-action="refresh-all-quota"]').click();
     await waitFor(() => $('#accounts-table .reset-cell'), 'reset credits never rendered');
     const reset = $('#accounts-table .reset-cell');
-    assert(reset.querySelector('strong').textContent === '2', `reset count=${reset.querySelector('strong').textContent}`);
-    // The soonest expiry, not the first one in the payload.
-    assert(reset.querySelector('small').textContent.includes('09/2'), `reset expiry=${reset.querySelector('small').textContent}`);
+    // Every credit is listed, oldest first, not just the soonest.
+    // Both credits are listed and the September one (the soonest) comes first.
+    // The second date is not pinned: it renders in the viewer's timezone.
+    assert(/^2 · 09\/2\d、\d\d\/\d\d$/.test(reset.textContent.trim()), `reset cell=${reset.textContent}`);
     assert(reset.title.includes('共 2 张'), `reset title=${reset.title}`);
     // Age alone must not turn the row into a fault; only a real failure does.
     assert($('#accounts-table .status-pill').textContent.trim() === '健康', `fresh snapshot status=${$('#accounts-table .status-pill').textContent}`);

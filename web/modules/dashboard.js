@@ -231,24 +231,26 @@ export function planDisplayLabel(value) {
   return raw.length > 1 ? raw[0].toUpperCase() + raw.slice(1) : raw.toUpperCase();
 }
 
-// The reset-credit count alone does not say how long the credits last. Credits
-// expire unused, so the soonest expiry is the part that can prompt an action;
-// it is stated plainly rather than styled as a warning, because the panel has
-// one alarm channel already and this is not a fault.
+// The reset-credit count alone does not say how long the credits last, and a
+// single soonest date hides the rest. Every credit's expiry is listed, oldest
+// first, because each one is a separate thing that expires unused. They are
+// stated plainly rather than styled as a warning: the panel has one alarm
+// channel and an expiry is not a fault.
 export function resetCreditSummary(snapshot = {}) {
   const complete = Boolean(snapshot.reset_info_complete);
   const credits = Array.isArray(snapshot.reset_credits) ? snapshot.reset_credits : [];
   const count = snapshot.reset_applicable_count ?? (complete ? credits.length : null);
-  if (count === null || count === undefined) return { count: '--', expiry: '', title: '' };
-  const soonest = credits
+  if (count === null || count === undefined) return { count: '--', expiries: [], text: '--', title: '' };
+  const stamps = credits
     .map((credit) => Date.parse(credit?.expires_at || ''))
     .filter(Number.isFinite)
-    .sort((left, right) => left - right)[0];
-  if (!Number.isFinite(soonest) || Number(count) <= 0) return { count: String(count), expiry: '', title: '' };
-  const date = new Date(soonest);
+    .sort((left, right) => left - right);
+  if (!stamps.length) return { count: String(count), expiries: [], text: String(count), title: '' };
+  const expiries = stamps.map((at) => new Date(at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }));
   return {
     count: String(count),
-    expiry: `最早 ${date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })} 到期`,
-    title: `最早到期的重置额度：${date.toLocaleString('zh-CN', { hour12: false })}${credits.length > 1 ? `（共 ${credits.length} 张，按到期时间排序）` : ''}`,
+    expiries,
+    text: `${count} · ${expiries.join('、')}`,
+    title: `重置额度到期时间（共 ${stamps.length} 张）：\n${stamps.map((at) => new Date(at).toLocaleString('zh-CN', { hour12: false })).join('\n')}`,
   };
 }

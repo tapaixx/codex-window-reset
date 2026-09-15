@@ -68,7 +68,7 @@ test('a failed refresh outranks the stale flag so the cause is named', () => {
   assert.equal(accountStatus({}, view), 'refresh_failed');
 });
 
-test('the reset column reports the soonest expiry beside the count', () => {
+test('the reset column lists every expiry, oldest first', () => {
   const summary = resetCreditSummary({
     reset_info_complete: true,
     reset_applicable_count: 3,
@@ -79,20 +79,24 @@ test('the reset column reports the soonest expiry beside the count', () => {
     ],
   });
   assert.equal(summary.count, '3');
-  assert.match(summary.expiry, /最早 09\/24 到期|最早 09\/23 到期/);
+  assert.equal(summary.expiries.length, 3, 'every credit must be listed, not only the soonest');
+  assert.deepEqual(summary.expiries, [...summary.expiries].sort(), 'expiries are not oldest first');
+  assert.equal(summary.text, `3 · ${summary.expiries.join('、')}`);
   assert.match(summary.title, /共 3 张/);
+  assert.equal(summary.title.split('\n').length, 4, 'the title must carry a full timestamp per credit');
 });
 
-test('an unsorted credit list still yields the soonest expiry', () => {
+test('an unsorted credit list is still rendered oldest first', () => {
   const late = resetCreditSummary({ reset_info_complete: true, reset_credits: [{ expires_at: '2026-12-01T00:00:00Z' }, { expires_at: '2026-09-20T00:00:00Z' }] });
   const early = resetCreditSummary({ reset_info_complete: true, reset_credits: [{ expires_at: '2026-09-20T00:00:00Z' }, { expires_at: '2026-12-01T00:00:00Z' }] });
-  assert.equal(late.expiry, early.expiry);
+  assert.deepEqual(late.expiries, early.expiries);
+  assert.equal(late.expiries.length, 2);
 });
 
 test('the reset column stays quiet when there is nothing to expire', () => {
-  assert.deepEqual(resetCreditSummary({}), { count: '--', expiry: '', title: '' });
-  assert.deepEqual(resetCreditSummary({ reset_info_complete: true, reset_credits: [] }), { count: '0', expiry: '', title: '' });
+  assert.deepEqual(resetCreditSummary({}), { count: '--', expiries: [], text: '--', title: '' });
+  assert.deepEqual(resetCreditSummary({ reset_info_complete: true, reset_credits: [] }), { count: '0', expiries: [], text: '0', title: '' });
   const noExpiry = resetCreditSummary({ reset_info_complete: true, reset_applicable_count: 2, reset_credits: [{ id: 'c' }] });
-  assert.equal(noExpiry.count, '2');
-  assert.equal(noExpiry.expiry, '');
+  assert.equal(noExpiry.text, '2');
+  assert.deepEqual(noExpiry.expiries, []);
 });

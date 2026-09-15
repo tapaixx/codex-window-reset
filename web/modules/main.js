@@ -111,11 +111,9 @@ function bootPanel() {
 
   function resetCreditCell(snapshot) {
     const summary = resetCreditSummary(snapshot);
-    if (!summary.expiry) return summary.count;
+    if (!summary.expiries.length) return summary.text;
     const wrap = document.createElement('span'); wrap.className = 'reset-cell'; wrap.title = summary.title;
-    const count = document.createElement('strong'); count.textContent = summary.count;
-    const expiry = document.createElement('small'); expiry.textContent = summary.expiry;
-    wrap.append(count, expiry);
+    wrap.textContent = summary.text;
     return wrap;
   }
 

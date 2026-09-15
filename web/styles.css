@@ -144,6 +144,6 @@ html[data-theme=dark] .upcoming-item>b{color:var(--ink)}
 .status-refresh_failed,.status-unavailable{color:#8a4c09;background:var(--orange-soft)}
 html[data-theme=dark] :is(.status-refresh_failed,.status-unavailable){color:#ffd099}
 html[data-theme=dark] .status-unknown{color:var(--muted);background:var(--surface-2)}
-.reset-cell{display:flex;flex-direction:column;gap:1px;line-height:1.35}
-.reset-cell>strong{font-weight:700}
-.reset-cell>small{color:var(--muted);font-size:9px;white-space:nowrap}
+/* Every expiry is listed, so this cell is the one place the table may wrap
+   rather than widen the row for accounts holding several credits. */
+.reset-cell{display:inline-block;max-width:170px;white-space:normal;line-height:1.4}
