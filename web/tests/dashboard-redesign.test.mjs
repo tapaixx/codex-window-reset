@@ -22,7 +22,7 @@ test('account summary and row projection match the monitoring table semantics', 
   const quota = {
     'acct-1': { snapshot: { windows: [{ short: true, remaining_percent: 83, reset_at: '2026-09-11T06:00:00Z' }] } },
   };
-  assert.deepEqual(summarizeAccounts(accounts, quota), { total: 3, healthy: 1, warning: 1, disabled: 1 });
+  assert.deepEqual(summarizeAccounts(accounts, quota), { total: 3, healthy: 1, unknown: 0, warning: 1, disabled: 1 });
   assert.deepEqual(projectAccountRow(accounts[0], { quota: quota['acct-1'], history, hidden: false }), {
     key: 'acct-1', email: 'alice@example.com', authIndex: '1', accountPrefix: 'acct_abc123', plan: 'Pro',
     status: 'healthy', health: 83, remaining: 83, used: 17, resetAt: '2026-09-11T06:00:00Z',
@@ -30,8 +30,12 @@ test('account summary and row projection match the monitoring table semantics', 
   });
 });
 
-test('an account without a cached quota snapshot is warning, not falsely healthy', () => {
-  assert.deepEqual(summarizeAccounts([accounts[0]], {}), { total: 1, healthy: 0, warning: 1, disabled: 0 });
+// The panel never polls, so "no snapshot yet" is the normal state on load. It
+// must not be counted as healthy, and it must not be counted as a warning
+// either: painting every account amber on every load is how the column stopped
+// carrying information.
+test('an account without a cached quota snapshot is unknown, neither healthy nor a warning', () => {
+  assert.deepEqual(summarizeAccounts([accounts[0]], {}), { total: 1, healthy: 0, unknown: 1, warning: 0, disabled: 0 });
 });
 
 test('operations summary separates scheduled, paused, guardrail, and stale counts', () => {

@@ -32,7 +32,7 @@ async function checkUIAudit(mode) {
     $('[data-action="refresh-all-quota"]').click();
     await waitFor(() => !$('[data-action="refresh-all-quota"]').disabled, 'refresh-all did not complete');
   };
-  const file = (auth_index, disabled = false) => ({ provider: 'codex', auth_index, email: `${auth_index}@example.com`, account_id: `acct_${auth_index}`, disabled });
+  const file = (auth_index, disabled = false) => ({ provider: 'codex', auth_index, email: `${auth_index}@example.com`, account_id: `acct_${auth_index}`, account_type: 'oauth', id_token: { plan_type: 'team' }, disabled });
   if (mode === 'audit-refresh') {
     $('[data-account-selection]').click();
     $('[data-account-scheduled]').click();
@@ -171,6 +171,20 @@ async function checkUIAudit(mode) {
     // The longest state must not push the summary strip off screen.
     assert(document.documentElement.scrollWidth <= innerWidth + 1, `alarm line overflows the page: ${document.documentElement.scrollWidth} > ${innerWidth}`);
     assert($('#next-run').getBoundingClientRect().right <= innerWidth + 1, 'alarm line is clipped at the viewport edge');
+  } else if (mode === 'audit-account-status') {
+    const cells = [...$('#accounts-table tr').children].map((cell) => cell.textContent.trim());
+    // account_type is "oauth"; the tier lives in the id_token.
+    assert(cells.includes('Team'), `plan column=${JSON.stringify(cells)}`);
+    assert(!cells.includes('oauth'), 'credential type leaked into the plan column');
+    const pill = $('#accounts-table .status-pill');
+    // The panel never polls, so a freshly loaded account has no snapshot yet.
+    assert(pill.textContent.trim() === '未刷新', `status without a snapshot=${pill.textContent}`);
+    assert(pill.classList.contains('status-unknown'), 'missing data is styled as a warning');
+    assert(pill.title.includes('刷新'), `status pill does not explain itself: ${pill.title}`);
+    await configure({ failAuthIndexes: ['browser'] });
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => $('#accounts-table .status-pill').textContent.trim() === '刷新失败', 'failed refresh is not named');
+    assert($('#accounts-table .status-pill').title.length > 0, 'failed status has no explanation');
   } else if (mode === 'audit-upcoming') {
     await waitFor(() => $('#upcoming-output'), 'upcoming panel missing');
     assert($('#upcoming-output').textContent.includes('计划未启用'), `disabled empty copy=${$('#upcoming-output').textContent}`);

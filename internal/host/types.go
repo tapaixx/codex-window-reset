@@ -43,6 +43,7 @@ type AuthFile struct {
 	AccountType    string `json:"account_type,omitempty"`
 	Account        string `json:"account,omitempty"`
 	Plan           string `json:"-"`
+	PlanType       string `json:"plan_type,omitempty"`
 	PlanLabel      string `json:"plan_label,omitempty"`
 	UpdatedAt      string `json:"updated_at,omitempty"`
 	Disabled       bool   `json:"disabled"`
@@ -72,12 +73,33 @@ func (f *AuthFile) UnmarshalJSON(data []byte) error {
 		AccountType:    firstString(object, "account_type", "accountType", "AccountType"),
 		Account:        firstString(object, "account", "Account"),
 		Plan:           firstString(object, "plan", "Plan"),
+		PlanType:       nestedPlanType(object),
 		PlanLabel:      firstString(object, "plan_label", "planLabel", "PlanLabel", "plan"),
 		UpdatedAt:      firstString(object, "updated_at", "updatedAt", "UpdatedAt", "modified_at", "modifiedAt", "ModifiedAt"),
 		Disabled:       firstBool(object, "disabled", "Disabled"),
 		Unavailable:    firstBool(object, "unavailable", "Unavailable"),
 	}
 	return nil
+}
+
+// nestedPlanType reads the subscription tier out of the OAuth id_token, which
+// is where the host actually carries it. The sibling account_type field is the
+// credential type ("oauth") and names no tier at all.
+func nestedPlanType(object map[string]json.RawMessage) string {
+	for _, key := range []string{"id_token", "idToken", "IDToken"} {
+		raw, ok := object[key]
+		if !ok {
+			continue
+		}
+		var token map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &token); err != nil {
+			continue
+		}
+		if value := firstString(token, "plan_type", "planType", "PlanType", "plan"); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // HTTPRequest is a host-mediated outbound HTTP request.  Body is encoded as

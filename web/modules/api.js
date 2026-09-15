@@ -299,7 +299,7 @@ export function normalizeHostAuthFiles(payload) {
         account_prefix: accountID,
         masked_identity: String(file?.email || `acct-${authIndex}`).replace(/^(.).*(@.*)$/u, '$1***$2'),
         account_id: accountID,
-        plan_label: String(file?.plan_label || file?.plan || file?.account_type || '').trim(),
+        plan_label: String(file?.plan_label || file?.plan || file?.id_token?.plan_type || file?.idToken?.plan_type || '').trim(),
         disabled: Boolean(file?.disabled),
         unavailable: Boolean(file?.unavailable),
         fingerprint: '',

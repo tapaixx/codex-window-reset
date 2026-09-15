@@ -42,15 +42,40 @@ export function maskOperationalIdentity(identity = {}) {
   };
 }
 
+// "No snapshot yet" is the normal state of a freshly opened panel, because the
+// panel deliberately never polls (ADR-0011). Reporting it as a warning made
+// every account look broken on every load and taught the Operator to ignore
+// the column. Missing data is its own state, and each real warning names the
+// condition instead of showing a bare 警告.
 export function accountStatus(account = {}, quota = {}) {
   if (account.disabled) return 'disabled';
-  if (account.unavailable || !quota?.snapshot || quota?.refresh_error_code || quota?.stale) return 'warning';
+  if (account.unavailable) return 'unavailable';
+  if (quota?.refresh_error_code) return 'refresh_failed';
+  if (!quota?.snapshot) return 'unknown';
+  if (quota?.stale) return 'stale';
   return 'healthy';
 }
 
+const STATUS_DETAIL = {
+  healthy: '额度快照已获取且在有效期内。',
+  unknown: '尚未获取额度快照。面板不会自动轮询，点击「刷新已选额度」或「刷新全部额度」后显示。',
+  stale: '额度快照已超过有效期，显示的是上一次的数值。刷新后更新。',
+  refresh_failed: '最近一次额度刷新失败，保留了上一次的快照。错误原因见同行的错误列。',
+  unavailable: '主机报告该凭证当前不可用，自动预热会跳过它。',
+  disabled: '该凭证已停用，不参与自动预热或手动检测。',
+};
+
+export function accountStatusDetail(status) {
+  return STATUS_DETAIL[status] || '';
+}
+
 export function summarizeAccounts(accounts = [], quotaByAccount = {}) {
-  const summary = { total: accounts.length, healthy: 0, warning: 0, disabled: 0 };
-  for (const account of accounts) summary[accountStatus(account, quotaByAccount[account.account_key])] += 1;
+  const summary = { total: accounts.length, healthy: 0, unknown: 0, warning: 0, disabled: 0 };
+  for (const account of accounts) {
+    const status = accountStatus(account, quotaByAccount[account.account_key]);
+    if (status === 'disabled' || status === 'healthy' || status === 'unknown') summary[status] += 1;
+    else summary.warning += 1;
+  }
   return summary;
 }
 
@@ -80,7 +105,7 @@ export function projectAccountRow(account = {}, { quota = {}, history = [], hidd
     email: identity.email,
     authIndex: identity.authIndex,
     accountPrefix: identity.accountPrefix,
-    plan: String(account.plan_label || account.account_type || '-'),
+    plan: planDisplayLabel(account.plan_label || account.plan_type),
     status: accountStatus(account, quota),
     health: remaining,
     remaining,
@@ -187,4 +212,18 @@ function dayLabel(at, now) {
   if (days <= 0) return '今天';
   if (days === 1) return '明天';
   return new Date(at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
+
+// The host's account_type is the credential type ("oauth"), not a subscription
+// tier; the tier travels in the OAuth id_token as plan_type. Known tiers get a
+// cased label and anything unrecognised is passed through rather than hidden,
+// so a new tier degrades to its raw name instead of disappearing.
+const PLAN_LABELS = { free: 'Free', go: 'Go', plus: 'Plus', pro: 'Pro', team: 'Team', business: 'Business', enterprise: 'Enterprise', edu: 'Edu' };
+
+export function planDisplayLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '-';
+  const known = PLAN_LABELS[raw.toLowerCase()];
+  if (known) return known;
+  return raw.length > 1 ? raw[0].toUpperCase() + raw.slice(1) : raw.toUpperCase();
 }

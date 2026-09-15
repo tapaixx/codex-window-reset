@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { describeNextRun, groupHistoryBatches, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
+import { accountStatusDetail, describeNextRun, groupHistoryBatches, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -32,7 +32,7 @@ export function prepareProbeRequest({ accounts = [], selectedAccountKeys = [], u
 }
 
 const WEEKDAYS = [['1', '一'], ['2', '二'], ['3', '三'], ['4', '四'], ['5', '五'], ['6', '六'], ['7', '日']];
-const statusLabels = { healthy: '健康', warning: '警告', disabled: '已停用' };
+const statusLabels = { healthy: '健康', unknown: '未刷新', stale: '快照过期', refresh_failed: '刷新失败', unavailable: '不可用', disabled: '已停用' };
 const triggerLabels = { health_probe: '手动检测', preheat: '自动预热', compensation: '失败补偿' };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -199,7 +199,7 @@ function bootPanel() {
       const ids = document.createElement('small'); ids.className = 'account-ids mono'; ids.textContent = `${model.authIndex || '--'} · ${model.accountPrefix || '--'}`; ids.title = `AUTH INDEX ${model.authIndex || '--'} · 账号前缀 ${model.accountPrefix || '--'}`;
       name.append(strong, small, ids);
       const scheduled = document.createElement('label'); scheduled.className = 'switch row-switch'; const scheduledInput = document.createElement('input'); scheduledInput.type = 'checkbox'; scheduledInput.checked = state.scheduledKeys.has(model.key); scheduledInput.disabled = account.disabled; scheduledInput.dataset.accountScheduled = model.key; scheduledInput.setAttribute('aria-label', `自动预热 ${model.email}`); const scheduledTrack = document.createElement('span'); const scheduledLabel = document.createElement('em'); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; scheduledInput.addEventListener('change', () => { scheduledInput.checked ? state.scheduledKeys.add(model.key) : state.scheduledKeys.delete(model.key); scheduledLabel.textContent = scheduledInput.checked ? '已计划' : '仅手动'; queueSimulation(); }); scheduled.append(scheduledInput, scheduledTrack, scheduledLabel);
-      const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status];
+      const status = document.createElement('span'); status.className = `status-pill status-${model.status}`; status.textContent = statusLabels[model.status] || model.status; status.title = accountStatusDetail(model.status);
       const actions = document.createElement('div'); actions.className = 'row-actions';
       const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh)); actions.append(refresh);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};

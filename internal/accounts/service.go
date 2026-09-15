@@ -208,7 +208,10 @@ func isCodex(file AuthFile) bool {
 func planLabel(file AuthFile) string {
 	// Only plan-specific host metadata is safe for the management projection.
 	// Generic Label and Name values may be credential filenames or identities.
-	for _, value := range []string{file.PlanLabel, file.Plan, file.AccountType} {
+	// AccountType is deliberately absent: the host sets it to the credential
+	// type ("oauth"), so using it as a fallback labelled every subscription
+	// tier "oauth". The tier lives in the OAuth id_token as plan_type.
+	for _, value := range []string{file.PlanLabel, file.Plan, file.PlanType} {
 		if value = strings.TrimSpace(value); value != "" {
 			return value
 		}

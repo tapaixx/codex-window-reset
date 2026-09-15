@@ -146,7 +146,7 @@ for (const [mode, width] of [
   ['audit-refresh-progress', 1440], ['audit-background-refresh', 1440], ['audit-history-batches', 375],
   ['audit-draft', 1440], ['audit-validation', 1440], ['audit-axis', 1440],
   ['audit-accessibility', 375], ['audit-theme-dark', 1440], ['audit-navigation', 1440], ['audit-zero-gain', 1440],
-  ['audit-next-run', 1440], ['audit-next-run-narrow', 375], ['audit-upcoming', 1440],
+  ['audit-next-run', 1440], ['audit-next-run-narrow', 375], ['audit-upcoming', 1440], ['audit-account-status', 1440],
 ]) {
   test(`ui audit regression: ${mode}`, { skip: browserSkip }, async () => {
     const fixture = await startFixtureServer();
@@ -282,7 +282,7 @@ async function serveManagementFixture(request, response, path, state) {
     state.authFilesRequests.push({ at: Date.now() });
     if (state.controls?.authFailure) { jsonResponse(response, 503, { message: 'fixture discovery failed' }); return; }
     if (state.controls?.files) { jsonResponse(response, 200, { files: state.controls.files }); return; }
-    jsonResponse(response, 200, { files: [{ provider: 'codex', email: 'browser@example.com', auth_index: 'browser', account_id: 'acct_browser', plan: 'Pro', disabled: false, unavailable: false }] });
+    jsonResponse(response, 200, { files: [{ provider: 'codex', email: 'browser@example.com', auth_index: 'browser', account_id: 'acct_browser', account_type: 'oauth', id_token: { plan_type: 'team' }, disabled: false, unavailable: false }] });
     return;
   }
   if (request.method === 'GET' && path.endsWith('/schedule')) {
