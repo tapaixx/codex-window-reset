@@ -18,6 +18,13 @@ import (
 //
 // Like Status, runtime state is loaded outside Runtime.mu so repository I/O
 // never blocks operation orchestration.
+type schedulerSupersession interface{ Superseded() bool }
+
+func (r *Runtime) schedulerSuperseded() bool {
+	checker, ok := any(r.scheduler).(schedulerSupersession)
+	return ok && checker != nil && checker.Superseded()
+}
+
 func (r *Runtime) Upcoming() domain.UpcomingView {
 	if r == nil {
 		return domain.UpcomingView{Batches: []domain.UpcomingBatch{}}
@@ -32,7 +39,7 @@ func (r *Runtime) Upcoming() domain.UpcomingView {
 	storeError := r.storeErrorCode
 	r.mu.RUnlock()
 
-	view := domain.UpcomingView{Enabled: enabled, StoreErrorCode: storeError, Batches: []domain.UpcomingBatch{}}
+	view := domain.UpcomingView{Enabled: enabled, StoreErrorCode: storeError, Superseded: r.schedulerSuperseded(), Batches: []domain.UpcomingBatch{}}
 	if stateErr != nil {
 		return view
 	}

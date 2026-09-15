@@ -37,7 +37,10 @@ type UpcomingBatch struct {
 // can tell "nothing is scheduled" apart from "the schedule is off" and from
 // "the state could not be read" without correlating two responses.
 type UpcomingView struct {
-	Enabled        bool            `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Superseded means another plugin instance owns scheduling, so the batches
+	// below are armed in this process but will not run.
+	Superseded     bool            `json:"superseded,omitempty"`
 	StoreErrorCode ErrorCode       `json:"store_error_code,omitempty"`
 	NextRunAt      time.Time       `json:"next_run_at,omitempty"`
 	Batches        []UpcomingBatch `json:"batches"`

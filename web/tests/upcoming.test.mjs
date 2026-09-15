@@ -33,6 +33,16 @@ test('unreadable state never renders as "nothing scheduled"', () => {
   assert.doesNotMatch(got.text, /没有任何待执行/);
 });
 
+// A hot-loaded plugin build leaves the previous instance alive with timers it
+// will never act on. Reporting a next run there would be a lie.
+test('a superseded instance says so instead of reporting a next run', () => {
+  const view = { enabled: true, superseded: true, next_run_at: '2026-09-15T02:31:40Z', batches: [batch('2026-09-15T02:31:40Z', 3)] };
+  const got = describeNextRun(view, now);
+  assert.equal(got.state, 'error');
+  assert.match(got.text, /另一个插件实例已接管调度/);
+  assert.doesNotMatch(got.text, /分钟后|小时后/);
+});
+
 test('the next run reports its clock time, batch size and distance', () => {
   const view = { enabled: true, next_run_at: '2026-09-15T02:31:40Z', batches: [batch('2026-09-15T02:31:40Z', 3)] };
   const got = describeNextRun(view, now);

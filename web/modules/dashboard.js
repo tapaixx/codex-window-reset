@@ -159,6 +159,11 @@ export function describeNextRun(view = {}, now = Date.now()) {
   if (view.store_error_code) {
     return { state: 'error', text: `下一次预热 · 读取计划状态失败（${view.store_error_code}）` };
   }
+  // Armed timers that will never fire look exactly like a healthy schedule, so
+  // a superseded instance has to say so before it reports a next run.
+  if (view.superseded) {
+    return { state: 'error', text: '下一次预热 · 另一个插件实例已接管调度，本实例不会执行（请重启 CLIProxyAPI）' };
+  }
   if (!view.enabled) {
     return { state: 'off', text: '下一次预热 · 计划未启用' };
   }

@@ -2,6 +2,8 @@ package schedule
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -75,6 +77,7 @@ type Scheduler struct {
 	exec    Executor
 
 	lifecycleMu sync.Mutex
+	ownerID     string
 	started     bool
 	stopping    bool
 	stopped     bool
@@ -167,8 +170,12 @@ func (s *Scheduler) Start() {
 
 	if s.states != nil {
 		now := s.clock.Now().UTC()
+		owner := newOwnerID()
 		startErr := s.states.Update(func(state *domain.RuntimeState) error {
 			ensureRuntimeStateMaps(state)
+			// Starting last wins, so a freshly loaded build takes scheduling
+			// over from the instance it replaces instead of racing it.
+			state.SchedulerOwner = owner
 			for id, occurrence := range state.Occurrences {
 				if occurrence.Status == domain.OccurrencePlanned && windowStarted(occurrence.PlannedOccurrence, now) ||
 					occurrence.Status == domain.OccurrenceRunning ||
@@ -181,6 +188,7 @@ func (s *Scheduler) Start() {
 			return nil
 		})
 		s.lifecycleMu.Lock()
+		s.ownerID = owner
 		s.startErr = startErr
 		s.lifecycleMu.Unlock()
 		if startErr != nil {
@@ -674,7 +682,7 @@ func (s *Scheduler) handleOccurrence(id string, generation uint64) error {
 		ensureRuntimeStateMaps(state)
 		entry, exists := state.Occurrences[id]
 		next, owned := state.NextRuns[id]
-		if !exists || entry.Status != domain.OccurrencePlanned || entry.PlannedAt.IsZero() || entry.PlannedAt.After(now) ||
+		if !s.ownsScheduling(*state) || !exists || entry.Status != domain.OccurrencePlanned || entry.PlannedAt.IsZero() || entry.PlannedAt.After(now) ||
 			!owned || !next.Equal(entry.PlannedAt) || !s.config.Enabled || !scheduledForConfig(s.config, entry.AccountKey) {
 			return nil
 		}
@@ -732,7 +740,7 @@ func (s *Scheduler) handleCompensation(id string, generation uint64) error {
 	}
 	entry, exists := state.Occurrences[id]
 	next, owned := state.NextRuns[id]
-	if !exists || entry.Status != domain.OccurrenceFailed || entry.CompensationAttempted || entry.CompensationDueAt.IsZero() ||
+	if !s.ownsScheduling(state) || !exists || entry.Status != domain.OccurrenceFailed || entry.CompensationAttempted || entry.CompensationDueAt.IsZero() ||
 		!owned || !next.Equal(entry.CompensationDueAt) || !s.config.Enabled || !scheduledForConfig(s.config, entry.AccountKey) {
 		return nil
 	}
@@ -889,6 +897,45 @@ func windowStarted(plan domain.PlannedOccurrence, now time.Time) bool {
 		return !plan.WindowStart.UTC().After(now)
 	}
 	return plan.PlannedAt.IsZero() || !plan.PlannedAt.UTC().After(now)
+}
+
+// ownsScheduling reports whether this instance is still the one allowed to
+// execute work. A superseded instance keeps serving reads but must never send
+// an upstream request: the account would be preheated twice and the older
+// build's decision logic would compete with the newer one's.
+func (s *Scheduler) ownsScheduling(state domain.RuntimeState) bool {
+	if state.SchedulerOwner == "" {
+		return true
+	}
+	s.lifecycleMu.Lock()
+	owner := s.ownerID
+	s.lifecycleMu.Unlock()
+	// An instance that never claimed (states unavailable at startup) keeps the
+	// previous permissive behaviour rather than falling silent.
+	return owner == "" || owner == state.SchedulerOwner
+}
+
+// Superseded reports that another plugin instance has taken over scheduling,
+// which means this instance's timers will fire and then decline to act. The
+// panel needs it: armed timers that never execute look exactly like a healthy
+// schedule.
+func (s *Scheduler) Superseded() bool {
+	if s == nil || s.states == nil {
+		return false
+	}
+	state, err := s.states.Load()
+	if err != nil {
+		return false
+	}
+	return !s.ownsScheduling(state)
+}
+
+func newOwnerID() string {
+	buffer := make([]byte, 16)
+	if _, err := cryptorand.Read(buffer); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(buffer)
 }
 
 func markMissed(state *domain.OccurrenceState, reason string) {

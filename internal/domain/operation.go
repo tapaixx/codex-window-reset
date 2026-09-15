@@ -158,10 +158,18 @@ type occurrenceStateWire struct {
 }
 
 type RuntimeState struct {
-	SchemaVersion  int                        `json:"schema_version"`
-	Occurrences    map[string]OccurrenceState `json:"occurrences"`
-	NextRuns       map[string]time.Time       `json:"next_runs"`
-	GuardrailHolds map[string]GuardrailHold   `json:"guardrail_holds"`
+	SchemaVersion int                        `json:"schema_version"`
+	Occurrences   map[string]OccurrenceState `json:"occurrences"`
+	NextRuns      map[string]time.Time       `json:"next_runs"`
+	// SchedulerOwner names the single plugin instance allowed to execute
+	// occurrences. A host that loads a new plugin build without unloading the
+	// previous one leaves two schedulers alive over one data directory, each
+	// with its own in-process lock, so the occurrence claim is not actually
+	// atomic between them and the same slot can run twice. The owner is
+	// written once at startup and only read afterwards, so every instance
+	// agrees on it without needing a shared lock.
+	SchedulerOwner string                   `json:"scheduler_owner,omitempty"`
+	GuardrailHolds map[string]GuardrailHold `json:"guardrail_holds"`
 }
 
 func (s RuntimeState) MarshalJSON() ([]byte, error) {
