@@ -52,14 +52,17 @@ export function accountStatus(account = {}, quota = {}) {
   if (account.unavailable) return 'unavailable';
   if (quota?.refresh_error_code) return 'refresh_failed';
   if (!quota?.snapshot) return 'unknown';
-  if (quota?.stale) return 'stale';
+  // A merely old snapshot is not an account problem. Every preheat refreshes
+  // quota immediately before deciding, so age never blocks one; the five-minute
+  // staleness boundary exists for decisions, not for this column. Flagging it
+  // here turned every row amber five minutes after each load and said nothing
+  // the timestamp column and the global freshness indicator do not already say.
   return 'healthy';
 }
 
 const STATUS_DETAIL = {
   healthy: '额度快照已获取且在有效期内。',
   unknown: '尚未获取额度快照。面板不会自动轮询，点击「刷新已选额度」或「刷新全部额度」后显示。',
-  stale: '额度快照已超过有效期，显示的是上一次的数值。刷新后更新。',
   refresh_failed: '最近一次额度刷新失败，保留了上一次的快照。错误原因见同行的错误列。',
   unavailable: '主机报告该凭证当前不可用，自动预热会跳过它。',
   disabled: '该凭证已停用，不参与自动预热或手动检测。',
@@ -226,4 +229,26 @@ export function planDisplayLabel(value) {
   const known = PLAN_LABELS[raw.toLowerCase()];
   if (known) return known;
   return raw.length > 1 ? raw[0].toUpperCase() + raw.slice(1) : raw.toUpperCase();
+}
+
+// The reset-credit count alone does not say how long the credits last. Credits
+// expire unused, so the soonest expiry is the part that can prompt an action;
+// it is stated plainly rather than styled as a warning, because the panel has
+// one alarm channel already and this is not a fault.
+export function resetCreditSummary(snapshot = {}) {
+  const complete = Boolean(snapshot.reset_info_complete);
+  const credits = Array.isArray(snapshot.reset_credits) ? snapshot.reset_credits : [];
+  const count = snapshot.reset_applicable_count ?? (complete ? credits.length : null);
+  if (count === null || count === undefined) return { count: '--', expiry: '', title: '' };
+  const soonest = credits
+    .map((credit) => Date.parse(credit?.expires_at || ''))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right)[0];
+  if (!Number.isFinite(soonest) || Number(count) <= 0) return { count: String(count), expiry: '', title: '' };
+  const date = new Date(soonest);
+  return {
+    count: String(count),
+    expiry: `最早 ${date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })} 到期`,
+    title: `最早到期的重置额度：${date.toLocaleString('zh-CN', { hour12: false })}${credits.length > 1 ? `（共 ${credits.length} 张，按到期时间排序）` : ''}`,
+  };
 }

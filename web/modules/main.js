@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { accountStatusDetail, describeNextRun, groupHistoryBatches, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
+import { accountStatusDetail, describeNextRun, groupHistoryBatches, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -32,7 +32,7 @@ export function prepareProbeRequest({ accounts = [], selectedAccountKeys = [], u
 }
 
 const WEEKDAYS = [['1', '一'], ['2', '二'], ['3', '三'], ['4', '四'], ['5', '五'], ['6', '六'], ['7', '日']];
-const statusLabels = { healthy: '健康', unknown: '未刷新', stale: '快照过期', refresh_failed: '刷新失败', unavailable: '不可用', disabled: '已停用' };
+const statusLabels = { healthy: '健康', unknown: '未刷新', refresh_failed: '刷新失败', unavailable: '不可用', disabled: '已停用' };
 const triggerLabels = { health_probe: '手动检测', preheat: '自动预热', compensation: '失败补偿' };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -107,6 +107,16 @@ function bootPanel() {
     node.dataset.state = minutes >= 30 ? 'stale' : minutes >= 5 ? 'aging' : 'fresh';
     node.textContent = `额度快照 · ${minutes < 1 ? '刚刚' : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`}`;
     if (stamps.length < state.accounts.length) node.textContent += `（${state.accounts.length - stamps.length} 个账号尚无快照）`;
+  }
+
+  function resetCreditCell(snapshot) {
+    const summary = resetCreditSummary(snapshot);
+    if (!summary.expiry) return summary.count;
+    const wrap = document.createElement('span'); wrap.className = 'reset-cell'; wrap.title = summary.title;
+    const count = document.createElement('strong'); count.textContent = summary.count;
+    const expiry = document.createElement('small'); expiry.textContent = summary.expiry;
+    wrap.append(count, expiry);
+    return wrap;
   }
 
   function renderUpcoming() {
@@ -207,7 +217,7 @@ function bootPanel() {
       // One probe produces one fact. Request outcome, window outcome and the
       // HTTP/latency pair described it across three columns; they are one cell
       // with the detail on hover.
-      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', snapshot.reset_applicable_count ?? (snapshot.reset_info_complete ? (snapshot.reset_credits || []).length : '--')), createCell('上次检测', lastProbeCell(record)), createCell('额度更新时间', `${formatDate(snapshot.captured_at)}${(quota[model.key]?.stale || quota[model.key]?.refresh_error_code) ? ' · 已过期' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
+      row.append(createCell('选择', checkbox), createCell('账号', name), createCell('自动预热', scheduled), createCell('套餐类型', model.plan), createCell('状态', status), createCell('短窗口', windowText(short)), createCell('长窗口', windowText(long)), createCell('重置额度', resetCreditCell(snapshot)), createCell('上次检测', lastProbeCell(record)), createCell('额度更新时间', `${formatDate(snapshot.captured_at)}${quota[model.key]?.refresh_error_code ? ' · 刷新失败，保留上次快照' : ''}`), createCell('错误原因', model.error || '--'), createCell('操作', actions));
       body.append(row);
     }
     renderSummary();

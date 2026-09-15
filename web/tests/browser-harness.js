@@ -50,7 +50,11 @@ async function checkUIAudit(mode) {
       assert($(`#accounts-table [data-account-key="${key}"]`), `${key} did not appear after refresh-all`);
     }
     assert($('#accounts-table [data-account-key="acct-revived"]').textContent.includes('80%'), 'successful quota lost when another account fails');
-    assert($('#accounts-table [data-account-key="acct-browser"]').textContent.includes('已过期'), 'failed quota was not marked stale');
+    // A failed refresh keeps the previous numbers on screen, so the row has to
+    // say the numbers are not current and why.
+    const failedRow = $('#accounts-table [data-account-key="acct-browser"]');
+    assert(failedRow.querySelector('.status-pill').textContent.trim() === '刷新失败', `failed refresh status=${failedRow.querySelector('.status-pill').textContent}`);
+    assert(failedRow.textContent.includes('保留上次快照'), 'failed refresh does not say the shown numbers are the previous ones');
     assert($('[data-account-selection="acct-browser"]').checked, 'manual selection was lost');
     assert($('[data-account-scheduled="acct-browser"]').checked && !$('[data-account-scheduled="acct-revived"]').checked, 'refresh changed scheduled membership');
     assert(/失败\s*1/.test($('#account-feedback').textContent), 'partial failure summary missing');
@@ -181,6 +185,16 @@ async function checkUIAudit(mode) {
     assert(pill.textContent.trim() === '未刷新', `status without a snapshot=${pill.textContent}`);
     assert(pill.classList.contains('status-unknown'), 'missing data is styled as a warning');
     assert(pill.title.includes('刷新'), `status pill does not explain itself: ${pill.title}`);
+    await configure({ resetCredits: { applicable_available_count: 2, credits: [{ id: 'later', expires_at: '2026-12-01T00:00:00Z' }, { id: 'soonest', expires_at: '2026-09-23T22:04:23Z' }] } });
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => $('#accounts-table .reset-cell'), 'reset credits never rendered');
+    const reset = $('#accounts-table .reset-cell');
+    assert(reset.querySelector('strong').textContent === '2', `reset count=${reset.querySelector('strong').textContent}`);
+    // The soonest expiry, not the first one in the payload.
+    assert(reset.querySelector('small').textContent.includes('09/2'), `reset expiry=${reset.querySelector('small').textContent}`);
+    assert(reset.title.includes('共 2 张'), `reset title=${reset.title}`);
+    // Age alone must not turn the row into a fault; only a real failure does.
+    assert($('#accounts-table .status-pill').textContent.trim() === '健康', `fresh snapshot status=${$('#accounts-table .status-pill').textContent}`);
     await configure({ failAuthIndexes: ['browser'] });
     $('[data-action="refresh-all-quota"]').click();
     await waitFor(() => $('#accounts-table .status-pill').textContent.trim() === '刷新失败', 'failed refresh is not named');

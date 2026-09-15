@@ -141,6 +141,9 @@ html[data-theme=dark] .upcoming-item>b{color:var(--ink)}
 
 /* --- Account status: unknown is not a warning --- */
 .status-unknown{color:#667085;background:#eef1f6}
-.status-stale,.status-refresh_failed,.status-unavailable{color:#8a4c09;background:var(--orange-soft)}
-html[data-theme=dark] :is(.status-stale,.status-refresh_failed,.status-unavailable){color:#ffd099}
+.status-refresh_failed,.status-unavailable{color:#8a4c09;background:var(--orange-soft)}
+html[data-theme=dark] :is(.status-refresh_failed,.status-unavailable){color:#ffd099}
 html[data-theme=dark] .status-unknown{color:var(--muted);background:var(--surface-2)}
+.reset-cell{display:flex;flex-direction:column;gap:1px;line-height:1.35}
+.reset-cell>strong{font-weight:700}
+.reset-cell>small{color:var(--muted);font-size:9px;white-space:nowrap}

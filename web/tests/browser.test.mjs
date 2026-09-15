@@ -347,14 +347,14 @@ async function serveManagementFixture(request, response, path, state) {
       ? requested
       : (state.controls?.files || [{ auth_index: 'browser' }]).map((file) => `acct-${file.auth_index}`);
     const failing = new Set((state.controls?.failAuthIndexes || []).map((authIndex) => `acct-${authIndex}`));
-    const result = keys.map((key) => (failing.has(key) ? failedQuotaView(key) : quotaView(key)));
+    const result = keys.map((key) => (failing.has(key) ? failedQuotaView(key) : quotaView(key, state.controls?.resetCredits)));
     jsonResponse(response, 200, { ok: true, result });
         return;
       }
   jsonResponse(response, 404, { ok: false, error: { code: 'not_found', message: 'not found' } });
 }
 
-function quotaView(accountKey = 'acct-browser') {
+function quotaView(accountKey = 'acct-browser', credits = null) {
   return {
     stale: false,
     refresh_error_code: '',
@@ -362,7 +362,8 @@ function quotaView(accountKey = 'acct-browser') {
       account_key: accountKey,
       captured_at: new Date().toISOString(),
       reset_info_complete: true,
-      reset_applicable_count: 2,
+      reset_applicable_count: credits?.applicable_available_count ?? 2,
+      reset_credits: credits?.credits,
       windows: [{ short: true, duration_minutes: 60, remaining_percent: 80 }],
     },
   };
