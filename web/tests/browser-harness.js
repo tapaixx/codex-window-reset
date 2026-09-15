@@ -141,9 +141,12 @@ async function checkUIAudit(mode) {
     assert($('[name="preheat_span_minutes"]').getAttribute('aria-invalid') === 'true', 'paired preheat requirement missing');
     set('preheat_span_minutes', '60'); set('probe_timeout_seconds', '1'); save();
     assert($('#schedule-form details').open && document.activeElement === $('[name="probe_timeout_seconds"]'), 'advanced invalid field stays hidden');
-    set('probe_timeout_seconds', '30'); set('remaining_quota_floor_percent', '0'); set('long_window_floor_percent', '0'); save();
+    set('probe_timeout_seconds', '30'); set('long_window_floor_percent', '0'); save();
     const state = await waitFor(async () => { const state = await fixtureState(); return state.scheduleRequests.length > before && state; }, 'valid config not saved');
-    assert(state.scheduleRequests.at(-1).remaining_quota_floor_percent === 0 && state.scheduleRequests.at(-1).long_window_floor_percent === 0, 'valid zero thresholds replaced by defaults');
+    assert(state.scheduleRequests.at(-1).long_window_floor_percent === 0, 'valid zero threshold replaced by a default');
+    // Retired fields must travel back unchanged rather than being reset.
+    assert(state.scheduleRequests.at(-1).remaining_quota_floor_percent === 20 && state.scheduleRequests.at(-1).remaining_window_floor_minutes === 60, `stored thresholds rewritten by the form: ${JSON.stringify(state.scheduleRequests.at(-1))}`);
+    assert(!document.querySelector('[name="remaining_quota_floor_percent"]') && !document.querySelector('[name="remaining_window_floor_minutes"]'), 'retired thresholds still have form inputs');
   } else if (mode === 'audit-axis') {
     await waitFor(() => $('.timeline-lane'), 'axis not rendered');
     const ticks = [...document.querySelectorAll('.timeline-ruler span')];

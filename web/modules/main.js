@@ -307,7 +307,7 @@ function bootPanel() {
   }
   function applySchedule(schedule) {
     state.schedule = structuredClone(schedule || {}); $('#schedule-enabled').checked = Boolean(schedule.enabled); text('#schedule-revision', schedule.revision ?? '--');
-    for (const name of ['timezone', 'window_hours', 'productivity_minutes', 'preheat_lead_minutes', 'preheat_span_minutes', 'remaining_quota_floor_percent', 'remaining_window_floor_minutes', 'long_window_floor_percent', 'probe_model', 'probe_timeout_seconds']) setField(name, schedule[name] ?? '');
+    for (const name of ['timezone', 'window_hours', 'productivity_minutes', 'preheat_lead_minutes', 'preheat_span_minutes', 'long_window_floor_percent', 'probe_model', 'probe_timeout_seconds']) setField(name, schedule[name] ?? '');
     state.scheduledKeys = new Set(schedule.scheduled_account_keys || []);
     const periods = schedule.work_periods || [];
     setField('work_start', periods[0]?.start || '09:00'); setField('lunch_start', periods[0]?.end || '12:00');
@@ -316,11 +316,14 @@ function bootPanel() {
     renderWeekdays(schedule.weekdays || [1, 2, 3, 4, 5]); state.skipTimes = [...(schedule.skip_window_times || [])]; renderSkipTimes();
     clearFieldErrors(); text('#schedule-feedback', ''); state.savedDraftSignature = draftSignature(); queueSimulation(); renderAccounts();
   }
+  // remaining_quota_floor_percent and remaining_window_floor_minutes are no
+  // longer read from the form: no decision uses them. The spread of
+  // state.schedule carries the stored values through unchanged.
   function readSchedule() {
     const form = $('#schedule-form'); const value = (name) => form.elements[name]?.value || ''; const integer = (name, fallback = 0) => value(name) === '' ? fallback : Number(value(name)); const optionalInteger = (name) => value(name) === '' ? null : Number(value(name));
     const fixedPeriods = [{ start: value('work_start'), end: value('lunch_start') }, { start: value('lunch_end'), end: value('work_end') }];
     const workPeriods = fixedPeriods.every((period) => period.start && period.end) ? fixedPeriods : readPeriods('#work-periods');
-    return { ...state.schedule, enabled: $('#schedule-enabled').checked, timezone: value('timezone'), window_hours: integer('window_hours', 5), productivity_minutes: integer('productivity_minutes', 60), preheat_lead_minutes: optionalInteger('preheat_lead_minutes'), preheat_span_minutes: optionalInteger('preheat_span_minutes'), remaining_quota_floor_percent: integer('remaining_quota_floor_percent', 20), remaining_window_floor_minutes: integer('remaining_window_floor_minutes', 60), long_window_floor_percent: integer('long_window_floor_percent', 10), probe_model: value('probe_model'), probe_timeout_seconds: integer('probe_timeout_seconds', 30), weekdays: $$('#weekdays input:checked').map((input) => Number(input.value)), work_periods: workPeriods, blackout_periods: readPeriods('#blackout-periods'), skip_window_times: [...state.skipTimes], scheduled_account_keys: [...state.scheduledKeys] };
+    return { ...state.schedule, enabled: $('#schedule-enabled').checked, timezone: value('timezone'), window_hours: integer('window_hours', 5), productivity_minutes: integer('productivity_minutes', 60), preheat_lead_minutes: optionalInteger('preheat_lead_minutes'), preheat_span_minutes: optionalInteger('preheat_span_minutes'), long_window_floor_percent: integer('long_window_floor_percent', 10), probe_model: value('probe_model'), probe_timeout_seconds: integer('probe_timeout_seconds', 30), weekdays: $$('#weekdays input:checked').map((input) => Number(input.value)), work_periods: workPeriods, blackout_periods: readPeriods('#blackout-periods'), skip_window_times: [...state.skipTimes], scheduled_account_keys: [...state.scheduledKeys] };
   }
 
   async function runSimulation() {
