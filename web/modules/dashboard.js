@@ -113,7 +113,7 @@ export function describeNextRun(view = {}, now = Date.now()) {
   const accounts = batch ? (batch.occurrences || []).length : 0;
   const minutes = Math.round((at - now) / 60000);
   const clock = new Date(at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
-  const day = dayPrefix(at, now);
+  const day = `${dayLabel(at, now)} `;
   const parts = [`下一次预热 · ${day}${clock}`];
   if (accounts > 0) parts.push(`${accounts} 个账号`);
   parts.push(relativeFromNow(minutes));
@@ -122,18 +122,69 @@ export function describeNextRun(view = {}, now = Date.now()) {
   return { state: minutes > 24 * 60 ? 'distant' : 'ready', text: parts.join(' · ') };
 }
 
-function dayPrefix(at, now) {
-  const start = (value) => { const date = new Date(value); date.setHours(0, 0, 0, 0); return date.getTime(); };
-  const days = Math.round((start(at) - start(now)) / 86400000);
-  if (days <= 0) return '今天 ';
-  if (days === 1) return '明天 ';
-  return `${new Date(at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })} `;
-}
-
 function relativeFromNow(minutes) {
   if (minutes <= 0) return '即将执行';
   if (minutes < 60) return `${minutes} 分钟后`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时后`;
   return `${Math.floor(hours / 24)} 天后`;
+}
+
+const clockLabel = (value) => {
+  const at = Date.parse(value || '');
+  return Number.isFinite(at) ? new Date(at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '--';
+};
+
+// projectUpcomingBatches renders what the scheduler has actually armed. It
+// mirrors the history panel's batch grouping so past and future batches read
+// the same way, and it only ever states conditions that are already true: a
+// quota decision depends on the snapshot at execution time and is not guessed
+// here. Accounts are joined client-side because the panel already holds the
+// account list together with the Operator's identity-masking preference.
+export function projectUpcomingBatches(view = {}, { accounts = [], hidden = false, now = Date.now() } = {}) {
+  const byKey = new Map(accounts.map((account) => [account.account_key, account]));
+  return (view.batches || []).map((batch) => {
+    const first = Date.parse(batch.occurrences?.[0]?.planned_at || '');
+    const startsToday = dayOffset(first, now);
+    return {
+      key: `${batch.local_date}/p${batch.period_index}`,
+      dayLabel: dayLabel(first, now),
+      windowLabel: `${clockLabel(batch.window_start)}–${clockLabel(batch.window_end)}`,
+      periodLabel: `计划时段 ${number(batch.period_index, 0) + 1}`,
+      accountCount: (batch.occurrences || []).length,
+      relative: Number.isFinite(first) ? relativeFromNow(Math.round((first - now) / 60000)) : '--',
+      near: Number.isFinite(startsToday) && startsToday <= 1,
+      occurrences: (batch.occurrences || []).map((slot) => {
+        const account = byKey.get(slot.account_key);
+        const rawIdentity = { email: account?.email || account?.masked_identity || slot.account_key, authIndex: '', accountPrefix: slot.account_key };
+        return {
+          key: slot.account_key,
+          email: (hidden ? maskOperationalIdentity(rawIdentity) : rawIdentity).email,
+          time: clockLabel(slot.planned_at),
+          blocked: blockedLabel(slot, account),
+        };
+      }),
+    };
+  });
+}
+
+function blockedLabel(slot = {}, account) {
+  if (slot.blocked_reason === 'guardrail_hold') return 'Guardrail Hold · 届时将跳过';
+  if (account?.disabled) return '账号已停用 · 届时将跳过';
+  if (account?.unavailable) return '账号不可用 · 届时将跳过';
+  return '';
+}
+
+function dayOffset(at, now) {
+  if (!Number.isFinite(at)) return NaN;
+  const start = (value) => { const date = new Date(value); date.setHours(0, 0, 0, 0); return date.getTime(); };
+  return Math.round((start(at) - start(now)) / 86400000);
+}
+
+function dayLabel(at, now) {
+  const days = dayOffset(at, now);
+  if (!Number.isFinite(days)) return '';
+  if (days <= 0) return '今天';
+  if (days === 1) return '明天';
+  return new Date(at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 }

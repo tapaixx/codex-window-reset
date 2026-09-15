@@ -229,7 +229,7 @@ export function renderSimulationComparison(root, result, config) {
   const groups = simPreheatGroups(result.preheat_windows, timezone);
   const overview = simElement('section', '', 'window-overview');
   const title = simElement('div', '', 'window-overview-title');
-  title.append(simElement('h3', '预热时段概览'), simElement('span', '来自服务端调度器'));
+  title.append(simElement('h3', '预热时段概览'), simElement('span', '按当前草稿参数推算'));
   const strip = simElement('div', '', 'window-strip');
   groups.forEach((group, index) => {
     const card = simElement('div', '', 'window-pill');

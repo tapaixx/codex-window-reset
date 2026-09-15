@@ -23,6 +23,7 @@
 async function checkUIAudit(mode) {
   await waitForPanel();
   const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
   const assert = (value, message) => { if (!value) throw new Error(message); };
   const configure = (controls) => fetch('/__browser-state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(controls) });
   const set = (name, value) => { const input = $(`[name="${name}"]`); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); };
@@ -170,6 +171,31 @@ async function checkUIAudit(mode) {
     // The longest state must not push the summary strip off screen.
     assert(document.documentElement.scrollWidth <= innerWidth + 1, `alarm line overflows the page: ${document.documentElement.scrollWidth} > ${innerWidth}`);
     assert($('#next-run').getBoundingClientRect().right <= innerWidth + 1, 'alarm line is clipped at the viewport edge');
+  } else if (mode === 'audit-upcoming') {
+    await waitFor(() => $('#upcoming-output'), 'upcoming panel missing');
+    assert($('#upcoming-output').textContent.includes('计划未启用'), `disabled empty copy=${$('#upcoming-output').textContent}`);
+    const soon = new Date(Date.now() + 90 * 60000).toISOString();
+    const far = new Date(Date.now() + 5 * 86400000).toISOString();
+    await configure({ upcoming: { enabled: true, next_run_at: soon, batches: [
+      { local_date: '2026-09-15', period_index: 1, window_start: soon, window_end: soon, occurrences: [
+        { account_key: 'acct-browser', planned_at: soon },
+        { account_key: 'acct-held', planned_at: soon, blocked_reason: 'guardrail_hold' }] },
+      { local_date: '2026-09-20', period_index: 0, window_start: far, window_end: far, occurrences: [{ account_key: 'acct-browser', planned_at: far }] }] } });
+    await reloadUntil(() => $('#upcoming-output summary'), 'armed batches not rendered');
+    // Only today and tomorrow by default; the rest stays behind the toggle.
+    assert($$('#upcoming-output summary').length === 1, `default horizon shows ${$$('#upcoming-output summary').length} batches`);
+    assert(!$('#upcoming-note').hidden && $('#upcoming-note').textContent.includes('另有 1 批'), 'folded batches are not announced');
+    assert($('#upcoming-output summary').textContent.includes('2 个账号') && $('#upcoming-output summary').textContent.includes('计划时段 2'), `batch header=${$('#upcoming-output summary').textContent}`);
+    $('#upcoming-output details').open = true;
+    assert($$('.upcoming-item').length === 2, 'account rows missing');
+    assert($('.upcoming-blocked')?.textContent.includes('Guardrail Hold'), 'held account not flagged');
+    assert($$('.upcoming-item')[0].textContent.includes('***'), 'identities are not masked by default');
+    $('[data-action="toggle-identities"]').click();
+    $('#upcoming-output details').open = true;
+    assert(!$$('.upcoming-item')[0].textContent.includes('***'), 'identity toggle does not reach the upcoming rows');
+    $('#upcoming-horizon').click();
+    assert($$('#upcoming-output summary').length === 2, 'full horizon toggle does not reveal later batches');
+    assert($('#upcoming-note').hidden, 'fold note still shown with the full horizon open');
   } else if (mode === 'audit-accessibility') {
     assert($('[data-account-selection]').getBoundingClientRect().width > 0, 'mobile individual account checkbox is hidden');
     const skip = $('#skip-window-input');

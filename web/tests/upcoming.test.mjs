@@ -57,3 +57,63 @@ test('same-day and next-day runs are labelled without a full date', () => {
   assert.match(today.text, /今天/);
   assert.match(tomorrow.text, /明天/);
 });
+
+import { projectUpcomingBatches } from '../modules/dashboard.js';
+
+const accountsFixture = [
+  { account_key: 'acct-a', email: 'alpha@example.com', disabled: false },
+  { account_key: 'acct-b', email: 'bravo@example.com', disabled: true },
+];
+const viewFixture = {
+  enabled: true,
+  next_run_at: '2026-09-15T02:31:40Z',
+  batches: [
+    { local_date: '2026-09-15', period_index: 1, window_start: '2026-09-15T02:30:00Z', window_end: '2026-09-15T02:40:00Z',
+      occurrences: [
+        { account_key: 'acct-a', planned_at: '2026-09-15T02:31:40Z' },
+        { account_key: 'acct-b', planned_at: '2026-09-15T02:35:00Z', blocked_reason: 'guardrail_hold' },
+      ] },
+    { local_date: '2026-09-18', period_index: 0, window_start: '2026-09-18T02:30:00Z', window_end: '2026-09-18T02:40:00Z',
+      occurrences: [{ account_key: 'acct-a', planned_at: '2026-09-18T02:31:40Z' }] },
+  ],
+};
+
+test('a batch header carries the window, period, size and distance', () => {
+  const [batch] = projectUpcomingBatches(viewFixture, { accounts: accountsFixture, now });
+  assert.equal(batch.dayLabel, '今天');
+  assert.equal(batch.windowLabel, '10:30–10:40');
+  assert.equal(batch.periodLabel, '计划时段 2');
+  assert.equal(batch.accountCount, 2);
+  assert.match(batch.relative, /分钟后|小时后/);
+});
+
+test('account rows carry the staggered time and follow the identity toggle', () => {
+  const shown = projectUpcomingBatches(viewFixture, { accounts: accountsFixture, hidden: false, now });
+  const masked = projectUpcomingBatches(viewFixture, { accounts: accountsFixture, hidden: true, now });
+  assert.equal(shown[0].occurrences[0].email, 'alpha@example.com');
+  assert.equal(masked[0].occurrences[0].email, 'a***@example.com');
+  assert.equal(shown[0].occurrences[0].time, '10:31');
+  assert.equal(shown[0].occurrences[1].time, '10:35');
+});
+
+test('only conditions that are already true are reported as blocking', () => {
+  const [batch] = projectUpcomingBatches(viewFixture, { accounts: accountsFixture, now });
+  assert.equal(batch.occurrences[0].blocked, '');
+  assert.match(batch.occurrences[1].blocked, /Guardrail Hold/);
+  const noHold = { ...viewFixture, batches: [{ ...viewFixture.batches[0], occurrences: [{ account_key: 'acct-b', planned_at: '2026-09-15T02:35:00Z' }] }] };
+  assert.match(projectUpcomingBatches(noHold, { accounts: accountsFixture, now })[0].occurrences[0].blocked, /账号已停用/);
+});
+
+test('batches beyond tomorrow are marked so the default view can fold them', () => {
+  const [near, far] = projectUpcomingBatches(viewFixture, { accounts: accountsFixture, now });
+  assert.equal(near.near, true);
+  assert.equal(far.near, false);
+  assert.equal(far.dayLabel, '09/18'); // zh-CN separator, matching formatDate elsewhere in the panel
+});
+
+test('an unknown account key still renders a row rather than vanishing', () => {
+  const orphan = { enabled: true, batches: [{ local_date: '2026-09-15', period_index: 0, window_start: '2026-09-15T02:30:00Z', window_end: '2026-09-15T02:40:00Z', occurrences: [{ account_key: 'acct-gone', planned_at: '2026-09-15T02:31:40Z' }] }] };
+  const [batch] = projectUpcomingBatches(orphan, { accounts: accountsFixture, now });
+  assert.equal(batch.occurrences.length, 1);
+  assert.equal(batch.occurrences[0].email, 'acct-gone');
+});

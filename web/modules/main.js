@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { describeNextRun, groupHistoryBatches, projectAccountRow, summarizeOperations } from './dashboard.js';
+import { describeNextRun, groupHistoryBatches, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -87,6 +87,7 @@ function bootPanel() {
     text('#selection-count', `已选择 ${state.selected.size} 个账号`);
     renderFreshness();
     renderNextRun();
+    renderUpcoming();
     renderFirstRun();
     const allSelectable = state.accounts.filter((account) => !account.disabled);
     const all = $('#select-all-checkbox');
@@ -106,6 +107,48 @@ function bootPanel() {
     node.dataset.state = minutes >= 30 ? 'stale' : minutes >= 5 ? 'aging' : 'fresh';
     node.textContent = `额度快照 · ${minutes < 1 ? '刚刚' : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`}`;
     if (stamps.length < state.accounts.length) node.textContent += `（${state.accounts.length - stamps.length} 个账号尚无快照）`;
+  }
+
+  function renderUpcoming() {
+    const body = $('#upcoming-output'); if (!body) return;
+    const note = $('#upcoming-note');
+    const expanded = new Set([...body.querySelectorAll('details[open]')].map((details) => details.dataset.batchKey));
+    body.replaceChildren();
+    const view = state.upcoming || { enabled: state.schedule?.enabled, store_error_code: state.status?.store_error_code, batches: [] };
+    const all = projectUpcomingBatches(view, { accounts: state.accounts, hidden: state.hidden, now: Date.now() });
+    const batches = state.fullHorizon ? all : all.filter((batch) => batch.near);
+    const emptyState = describeNextRun(view, Date.now());
+    if (!batches.length) {
+      const row = document.createElement('tr');
+      // The empty reading must never be a neutral "nothing yet": an enabled
+      // schedule with nothing armed is a fault, and it is the shape a stalled
+      // scheduler leaves behind.
+      const hiddenByFilter = all.length > 0;
+      const message = hiddenByFilter ? `今天与明天没有预热批次；完整计划视野中还有 ${all.length} 批` : emptyState.text.replace('下一次预热 · ', '');
+      const cell = createCell('', message, 'empty-row');
+      cell.colSpan = 8; row.append(cell); body.append(row);
+    }
+    for (const batch of batches) {
+      const row = document.createElement('tr'); const cell = document.createElement('td'); cell.colSpan = 8;
+      const details = document.createElement('details'); details.dataset.batchKey = batch.key; details.open = expanded.has(batch.key);
+      const summaryNode = document.createElement('summary');
+      summaryNode.textContent = `${batch.dayLabel} ${batch.windowLabel} · ${batch.periodLabel} · ${batch.accountCount} 个账号 · ${batch.relative}`;
+      const list = document.createElement('div'); list.className = 'history-batch-details';
+      for (const slot of batch.occurrences) {
+        const item = document.createElement('div'); item.className = 'history-batch-item upcoming-item';
+        const who = document.createElement('span'); who.textContent = slot.email;
+        const when = document.createElement('b'); when.textContent = slot.time;
+        item.append(who, when);
+        if (slot.blocked) { const blocked = document.createElement('em'); blocked.className = 'upcoming-blocked'; blocked.textContent = slot.blocked; item.append(blocked); }
+        list.append(item);
+      }
+      details.append(summaryNode, list); cell.append(details); row.append(cell); body.append(row);
+    }
+    if (note) {
+      const hiddenCount = all.length - batches.length;
+      note.hidden = hiddenCount <= 0;
+      note.textContent = hiddenCount > 0 ? `另有 ${hiddenCount} 批在今天与明天之后；打开「完整计划视野」查看。` : '';
+    }
   }
 
   function renderNextRun() {
@@ -442,6 +485,7 @@ function bootPanel() {
   $('[data-action="refresh-quota"]').addEventListener('click', (event) => refreshQuota([...state.selected], event.currentTarget));
   $('[data-action="refresh-all-quota"]').addEventListener('click', (event) => refreshAllQuota(event.currentTarget));
   $('[data-action="run-probe"]').addEventListener('click', openProbe);
+  $('#upcoming-horizon').addEventListener('change', (event) => { state.fullHorizon = event.target.checked; renderUpcoming(); });
   $('[data-action="dismiss-first-run"]').addEventListener('click', () => { state.firstRunDismissed = true; renderFirstRun(); });
   $('[data-action="restore-schedule"]').addEventListener('click', () => applySchedule(state.schedule));
   $('[data-action="add-work-period"]')?.addEventListener('click', () => addPeriod('#work-periods'));
