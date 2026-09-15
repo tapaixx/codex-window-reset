@@ -1,6 +1,6 @@
 # Codex Window Reset
 
-> CLIProxyAPI 原生插件 · Linux `amd64` / `arm64` · 当前版本 **v0.0.22**
+> CLIProxyAPI 原生插件 · Linux `amd64` / `arm64` · 当前版本 **v0.0.23**
 
 [下载 Release](https://github.com/tapaixx/codex-window-reset/releases) ·
 [插件商店](https://github.com/tapaixx/CLIProxyAPI-Plugins-Store) ·
@@ -269,18 +269,18 @@ rollback step and can destroy operational evidence.
 
 ## 验证 / Verification
 
-以下文件名已对应 `v0.0.22` Release。下载后可校验 SHA-256；浏览器验收需要
+以下文件名已对应 `v0.0.23` Release。下载后可校验 SHA-256；浏览器验收需要
 Chromium，源码构建需要 Go 1.24、Node.js 和 C 编译器，交叉构建 arm64
 还需要 `aarch64-linux-gnu-gcc`。
 
-The current release is `v0.0.22`; scripts receive and store `0.0.22` without the
+The current release is `v0.0.23`; scripts receive and store `0.0.23` without the
 leading `v`. The GitHub repository is
 <https://github.com/tapaixx/codex-window-reset>. A release contains these
 seven named assets:
 
 ```text
-codex-window-reset_0.0.22_linux_amd64.zip
-codex-window-reset_0.0.22_linux_arm64.zip
+codex-window-reset_0.0.23_linux_amd64.zip
+codex-window-reset_0.0.23_linux_arm64.zip
 checksums.txt
 codex-window-reset-linux-amd64.so
 codex-window-reset-linux-arm64.so
@@ -292,9 +292,9 @@ Verify downloaded assets from their directory with:
 
 ```bash
 sha256sum --check checksums.txt
-unzip -Z1 codex-window-reset_0.0.22_linux_amd64.zip \
+unzip -Z1 codex-window-reset_0.0.23_linux_amd64.zip \
   | diff -u - <(printf 'codex-window-reset.so\n')
-unzip -Z1 codex-window-reset_0.0.22_linux_arm64.zip \
+unzip -Z1 codex-window-reset_0.0.23_linux_arm64.zip \
   | diff -u - <(printf 'codex-window-reset.so\n')
 ```
 
