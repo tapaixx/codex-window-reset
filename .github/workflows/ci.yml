@@ -10,6 +10,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -37,8 +38,16 @@ jobs:
 
       - name: Install Chromium for browser acceptance tests
         run: |
+          # The runner image already ships a Chromium-family browser. Installing
+          # the distro package pulls in the snap transitional package, which can
+          # hang indefinitely rather than fail, and the retry loop below only
+          # reacts to failures. Prefer what is present, and bound every attempt.
+          if command -v chromium || command -v chromium-browser || command -v google-chrome; then
+            exit 0
+          fi
+          export DEBIAN_FRONTEND=noninteractive
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium; then
+            if timeout 240 sudo -E apt-get update && timeout 300 sudo -E apt-get install --no-install-recommends -y chromium; then
               exit 0
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -48,7 +57,7 @@ jobs:
           done
 
       - name: Run Node tests
-        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" bash scripts/verify-panel.sh
+        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser || command -v google-chrome)" bash scripts/verify-panel.sh
 
       - name: Build Linux amd64 plugin
         run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o /tmp/codex-window-reset-amd64.so .
@@ -74,6 +83,7 @@ jobs:
             runner: ubuntu-24.04-arm
             goarch: arm64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -92,8 +102,16 @@ jobs:
 
       - name: Install Chromium for browser acceptance tests
         run: |
+          # The runner image already ships a Chromium-family browser. Installing
+          # the distro package pulls in the snap transitional package, which can
+          # hang indefinitely rather than fail, and the retry loop below only
+          # reacts to failures. Prefer what is present, and bound every attempt.
+          if command -v chromium || command -v chromium-browser || command -v google-chrome; then
+            exit 0
+          fi
+          export DEBIAN_FRONTEND=noninteractive
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install --no-install-recommends -y chromium; then
+            if timeout 240 sudo -E apt-get update && timeout 300 sudo -E apt-get install --no-install-recommends -y chromium; then
               exit 0
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -108,7 +126,7 @@ jobs:
           go vet ./...
           go test -count=1 ./...
           go test -count=1 -race ./...
-          BROWSER_BIN="$(command -v chromium || command -v chromium-browser)" bash scripts/verify-panel.sh
+          BROWSER_BIN="$(command -v chromium || command -v chromium-browser || command -v google-chrome)" bash scripts/verify-panel.sh
 
       - name: Build native shared library
         run: CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -buildmode=c-shared -o "/tmp/codex-window-reset-${{ matrix.architecture }}.so" .
