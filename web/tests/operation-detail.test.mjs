@@ -5,7 +5,7 @@ import { describeOperation, groupHistoryBatches, requestWasSent } from '../modul
 const labels = {
   probeOutcomes: { succeeded: '成功', timeout: '超时', disabled: '已停用' },
   windowOutcomes: { verified_started: '已开窗', not_observed: '未观察' },
-  decisions: { proceed: '判定需要预热', sufficient_window: '额度充足，当前窗口仍有效', guardrail_hold: 'Guardrail Hold：长窗口余量过低' },
+  decisions: { proceed: '判定需要预热', window_active: '窗口已在运行，无法再开新窗口', sufficient_window: '窗口已在运行（旧记录：额度充足）', guardrail_hold: 'Guardrail Hold：长窗口余量过低' },
 };
 
 // Captured verbatim from a live deployment: the scheduler fired on time and
@@ -27,7 +27,7 @@ const skippedRecord = {
 
 test('a skipped operation says no request was sent and why', () => {
   const parts = describeOperation(skippedRecord, labels);
-  assert.deepEqual(parts, ['未发送请求', '额度充足，当前窗口仍有效']);
+  assert.deepEqual(parts, ['未发送请求', '窗口已在运行（旧记录：额度充足）']);
   assert.equal(requestWasSent(skippedRecord), false);
 });
 
@@ -60,6 +60,17 @@ test('a batch counts its skipped operations so it cannot be read as a failure', 
   assert.equal(batch.skipped, 2);
   const [mixed] = groupHistoryBatches([skippedRecord, { ...skippedRecord, account_key: 'acct-two', request_outcome: 'succeeded', decision: 'proceed' }]);
   assert.equal(mixed.skipped, 1);
+});
+
+// History written before the decision was renamed still has to read sensibly.
+test('the retired sufficient_window value is still labelled', () => {
+  const parts = describeOperation({ ...skippedRecord, decision: 'sufficient_window' }, labels);
+  assert.ok(parts[1].includes('窗口已在运行'), parts.join(' · '));
+});
+
+test('a window-active skip names the reason a request would be useless', () => {
+  const parts = describeOperation({ ...skippedRecord, decision: 'window_active' }, labels);
+  assert.deepEqual(parts, ['未发送请求', '窗口已在运行，无法再开新窗口']);
 });
 
 test('an unknown decision falls back to its raw value rather than disappearing', () => {

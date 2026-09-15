@@ -190,8 +190,11 @@ func (h *GuardrailHold) UnmarshalJSON(data []byte) error {
 type QuotaDecision string
 
 const (
-	DecisionProceed          QuotaDecision = "proceed"
+	DecisionProceed QuotaDecision = "proceed"
+	// DecisionSufficientWindow is retained for history written before the
+	// decision became "a window is already running". It is no longer produced.
 	DecisionSufficientWindow QuotaDecision = "sufficient_window"
+	DecisionWindowActive     QuotaDecision = "window_active"
 	DecisionGuardrailHold    QuotaDecision = "guardrail_hold"
 	DecisionUnknownFailOpen  QuotaDecision = "quota_unknown_fail_open"
 )

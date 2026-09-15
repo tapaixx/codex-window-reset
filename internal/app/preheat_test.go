@@ -25,11 +25,11 @@ func TestPreheatGuardrailAndSufficientDecisionsSkipProbe(t *testing.T) {
 			want: domain.DecisionGuardrailHold,
 		},
 		{
-			name: "sufficient",
+			name: "window already running",
 			snapshot: domain.UsageSnapshot{AccountKey: "a", CapturedAt: time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC), Windows: []domain.UsageWindow{
 				{DurationMinutes: 300, RemainingPercent: 80, ResetAt: time.Date(2026, 9, 9, 15, 0, 0, 0, time.UTC), Short: true},
 			}},
-			want: domain.DecisionSufficientWindow,
+			want: domain.DecisionWindowActive,
 		},
 	}
 	for _, tc := range tests {

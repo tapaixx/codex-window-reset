@@ -418,7 +418,7 @@ func TestQuotaEvaluateFailsOpenWithoutKnownHold(t *testing.T) {
 	}
 }
 
-func TestQuotaEvaluateUsesInclusiveSufficientWindowFloors(t *testing.T) {
+func TestQuotaEvaluateSkipsAnyRunningWindow(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	h := newQuotaHost(now)
 	h.responses[quotaUsageURL] = host.HTTPResponse{StatusCode: 200, Body: usageFixture(now, 80, 20, true)}
@@ -428,8 +428,8 @@ func TestQuotaEvaluateUsesInclusiveSufficientWindowFloors(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := domain.DefaultConfig()
-	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionSufficientWindow {
-		t.Fatalf("decision = %q, want %q at inclusive floors", got, domain.DecisionSufficientWindow)
+	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionWindowActive {
+		t.Fatalf("decision = %q, want %q for a running window", got, domain.DecisionWindowActive)
 	}
 }
 
@@ -504,7 +504,7 @@ func TestQuotaGuardrailHoldClearsOnlyAfterEveryLongWindowRecovers(t *testing.T) 
 	if _, err := s.Refresh(context.Background(), account); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionProceed && got != domain.DecisionSufficientWindow {
+	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionProceed && got != domain.DecisionWindowActive {
 		t.Fatalf("initial decision = %q", got)
 	}
 	h.mu.Lock()
@@ -550,8 +550,10 @@ func TestQuotaGuardrailHoldClearsOnlyAfterEveryLongWindowRecovers(t *testing.T) 
 	if _, err := s.Refresh(context.Background(), account); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionSufficientWindow {
-		t.Fatalf("full recovery decision = %q, want sufficient window", got)
+	// The hold is gone, so the decision falls through to the window rule; this
+	// fixture's short window is running, which is skipped on its own merits.
+	if got := s.Evaluate(cfg, account.Key, now); got != domain.DecisionWindowActive {
+		t.Fatalf("full recovery decision = %q, want the hold released", got)
 	}
 	state, err := repo.Load()
 	if err != nil {

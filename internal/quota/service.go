@@ -348,15 +348,14 @@ func decide(snapshot domain.SnapshotView, hold *domain.GuardrailHold, cfg domain
 	if anyLongAtOrBelow(snapshot.Snapshot, cfg.LongWindowFloorPercent) {
 		return domain.DecisionGuardrailHold
 	}
+	// A preheat request can only ever open a window while none is running.
+	// Sending one into a running window cannot start another, so it buys
+	// nothing and spends quota — and it is worst precisely when the running
+	// window is nearly exhausted, which is where the previous quota and
+	// remaining-time floors let it through.
 	short, ok := shortestWindow(snapshot.Snapshot.Windows)
-	// Skipping requires a window that is actually running. An idle account
-	// reports a full unstarted window whose reset slides forward with every
-	// read, which satisfied both thresholds forever and skipped every preheat
-	// in exactly the situation a preheat exists for.
-	if !snapshot.Stale && ok && short.ActiveAt(snapshot.Snapshot.CapturedAt) &&
-		short.RemainingPercent >= cfg.RemainingQuotaFloorPercent &&
-		short.ResetAt.Sub(now.UTC()) >= time.Duration(cfg.RemainingWindowFloorMinutes)*time.Minute {
-		return domain.DecisionSufficientWindow
+	if !snapshot.Stale && ok && short.ActiveAt(snapshot.Snapshot.CapturedAt) {
+		return domain.DecisionWindowActive
 	}
 	return domain.DecisionProceed
 }

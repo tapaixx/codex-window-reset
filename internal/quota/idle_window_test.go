@@ -54,9 +54,9 @@ func TestIdleAccountProceedsInsteadOfSkippingAsSufficient(t *testing.T) {
 	}
 }
 
-// The complementary case must keep working: a window that is genuinely running
-// with quota to spare is still not worth a request.
-func TestRunningWindowWithHeadroomStillSkips(t *testing.T) {
+// The complementary case: a request sent into a running window cannot open
+// another one, so it is skipped no matter how much quota that window has left.
+func TestRunningWindowIsSkippedWhateverItsHeadroom(t *testing.T) {
 	now := time.Date(2026, 9, 15, 4, 12, 54, 0, time.UTC)
 	h := newQuotaHost(now)
 	h.responses[quotaUsageURL] = host.HTTPResponse{StatusCode: 200, Body: usageFixture(now, 20, 20, true)}
@@ -65,7 +65,47 @@ func TestRunningWindowWithHeadroomStillSkips(t *testing.T) {
 	if _, err := s.Refresh(context.Background(), account); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.Evaluate(domain.DefaultConfig(), account.Key, now); got != domain.DecisionSufficientWindow {
-		t.Fatalf("decision = %q, want %q for a running window with headroom", got, domain.DecisionSufficientWindow)
+	if got := s.Evaluate(domain.DefaultConfig(), account.Key, now); got != domain.DecisionWindowActive {
+		t.Fatalf("decision = %q, want %q for a running window", got, domain.DecisionWindowActive)
 	}
+}
+
+// The case the quota and remaining-time floors used to let through: a running
+// window that is nearly exhausted and about to reset. A request there still
+// cannot open a window, and it spends the little that is left.
+func TestNearlyExhaustedRunningWindowIsStillSkipped(t *testing.T) {
+	now := time.Date(2026, 9, 15, 4, 12, 54, 0, time.UTC)
+	h := newQuotaHost(now)
+	h.responses[quotaUsageURL] = host.HTTPResponse{StatusCode: 200, Body: nearlyExhaustedUsageFixture(now)}
+	s := New(h, store.NewRuntimeStateRepository(t.TempDir()), &quotaClock{now: now})
+	account := testAccount("acct-one", "auth-one")
+	if _, err := s.Refresh(context.Background(), account); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Evaluate(domain.DefaultConfig(), account.Key, now); got != domain.DecisionWindowActive {
+		t.Fatalf("decision = %q, want %q: a request cannot open a second window", got, domain.DecisionWindowActive)
+	}
+}
+
+// 5% left on the short window and twenty minutes before it resets: below both
+// retired floors, so the old logic returned proceed.
+func nearlyExhaustedUsageFixture(now time.Time) []byte {
+	body, err := json.Marshal(map[string]any{
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
+				"limit_window_seconds": 18000,
+				"used_percent":         95,
+				"reset_at":             now.Add(20 * time.Minute).Unix(),
+			},
+			"secondary_window": map[string]any{
+				"limit_window_seconds": 604800,
+				"used_percent":         31,
+				"reset_at":             now.Add(4 * 24 * time.Hour).Unix(),
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
 }

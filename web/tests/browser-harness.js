@@ -185,7 +185,7 @@ async function checkUIAudit(mode) {
     assert(header.includes('全部跳过，未发送请求'), `batch header does not state the skips: ${header}`);
     $('#history-output details').open = true;
     const items = $$('.history-batch-item').map((node) => node.textContent);
-    assert(items[0].includes('未发送请求') && items[0].includes('额度充足'), `skip reason missing: ${items[0]}`);
+    assert(items[0].includes('未发送请求') && items[0].includes('窗口已在运行'), `skip reason missing: ${items[0]}`);
     // The raw enum values and a fabricated HTTP/latency reading must be gone.
     for (const leak of ['disabled', 'not_observed', 'HTTP', '0 ms']) {
       assert(!items[0].includes(leak), `${leak} still shown for a skipped operation: ${items[0]}`);

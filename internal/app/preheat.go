@@ -95,7 +95,7 @@ func (r *Runtime) executePreheat(ctx context.Context, occurrence domain.PlannedO
 	quotaCancel()
 	now := r.now()
 	decision := r.evaluateQuota(config, key, now, before, refreshErr)
-	if decision == domain.DecisionGuardrailHold || decision == domain.DecisionSufficientWindow {
+	if decision == domain.DecisionGuardrailHold || decision == domain.DecisionWindowActive || decision == domain.DecisionSufficientWindow {
 		record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 		record.RequestOutcome = domain.RequestDisabled
 		record.WindowOutcome = domain.WindowNotObserved
@@ -240,11 +240,8 @@ func fallbackDecision(r *Runtime, config domain.Config, key string, now time.Tim
 		}
 	}
 	short := snapshot.Windows[shortIndex]
-	if fresh && short.ActiveAt(snapshot.CapturedAt) &&
-		short.RemainingPercent >= config.RemainingQuotaFloorPercent &&
-		!short.ResetAt.IsZero() &&
-		short.ResetAt.Sub(now.UTC()) >= time.Duration(config.RemainingWindowFloorMinutes)*time.Minute {
-		return domain.DecisionSufficientWindow
+	if fresh && short.ActiveAt(snapshot.CapturedAt) {
+		return domain.DecisionWindowActive
 	}
 	return domain.DecisionProceed
 }

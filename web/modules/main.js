@@ -44,7 +44,7 @@ const formatDate = (value, fallback = '--') => {
 const formatDuration = (milliseconds) => milliseconds >= 1000 ? `${(milliseconds / 1000).toFixed(1)} 秒` : `${milliseconds || 0} ms`;
 
 const probeOutcomeLabels = { succeeded: '成功', unauthorized: '未授权', forbidden: '被拒绝', payment_required: '需付费', rate_limited: '被限流', upstream_error: '上游错误', network_error: '网络错误', timeout: '超时', response_error: '响应异常', unexpected_output: '输出异常', credential_error: '凭据错误', disabled: '已停用' };
-const decisionLabels = { proceed: '判定需要预热', sufficient_window: '额度充足，当前窗口仍有效', guardrail_hold: 'Guardrail Hold：长窗口余量过低', quota_unknown_fail_open: '额度未知，按放行处理' };
+const decisionLabels = { proceed: '判定需要预热', window_active: '窗口已在运行，无法再开新窗口', sufficient_window: '窗口已在运行（旧记录：额度充足）', guardrail_hold: 'Guardrail Hold：长窗口余量过低', quota_unknown_fail_open: '额度未知，按放行处理' };
 const windowOutcomeLabels = { verified_started: '已开窗', already_active: '窗口已在', unchanged: '窗口未变', unverified: '未验证', not_observed: '未观察' };
 
 // One probe, one cell: the request outcome carries the colour, the window
