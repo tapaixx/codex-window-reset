@@ -82,8 +82,13 @@ func ParseUsage(raw []byte, capturedAt time.Time) (domain.UsageSnapshot, error) 
 	snapshot := domain.UsageSnapshot{
 		CapturedAt:        capturedAt,
 		Windows:           windows,
+		LimitReached:      limitReached,
 		ResetInfoComplete: false,
 	}
+	if value, ok := firstAny(root, "rate_limit_reached_type", "rateLimitReachedType"); ok {
+		snapshot.ReachedType = stringValue(value)
+	}
+	snapshot.AvailableAt = earliestModelAvailability(root)
 	if embedded, ok := firstAny(root, "rate_limit_reset_credits", "rateLimitResetCredits"); ok {
 		info := parseResetCreditValue(embedded)
 		if info.valid {
@@ -600,4 +605,41 @@ func cloneInt(value *int) *int {
 
 func finite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+// earliestModelAvailability reads model_usage for the soonest time an
+// unavailable model comes back. Upstream reports this separately from the
+// usage percentages, and it is the only field that states when an account that
+// cannot be used right now becomes usable again.
+func earliestModelAvailability(root map[string]any) time.Time {
+	usage, ok := firstAny(root, "model_usage", "modelUsage")
+	if !ok {
+		return time.Time{}
+	}
+	object, ok := usage.(map[string]any)
+	if !ok {
+		return time.Time{}
+	}
+	var soonest time.Time
+	for _, value := range object {
+		entry, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if available, ok := firstAny(entry, "available"); ok && boolValue(available) {
+			continue
+		}
+		at, ok := firstAny(entry, "available_at", "availableAt")
+		if !ok {
+			continue
+		}
+		parsed := timeValue(at)
+		if parsed.IsZero() {
+			continue
+		}
+		if soonest.IsZero() || parsed.Before(soonest) {
+			soonest = parsed.UTC()
+		}
+	}
+	return soonest
 }

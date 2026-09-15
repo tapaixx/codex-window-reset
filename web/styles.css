@@ -147,3 +147,6 @@ html[data-theme=dark] .status-unknown{color:var(--muted);background:var(--surfac
 /* Every expiry is listed, so this cell is the one place the table may wrap
    rather than widen the row for accounts holding several credits. */
 .reset-cell{display:inline-block;max-width:170px;white-space:normal;line-height:1.4}
+.quota-note{display:block;font-style:normal;font-size:9px;line-height:1.4}
+.quota-note-usable{color:#087a51}
+.quota-note-blocked{color:#bd3035}

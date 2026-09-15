@@ -100,3 +100,34 @@ test('the reset column stays quiet when there is nothing to expire', () => {
   assert.equal(noExpiry.text, '2');
   assert.deepEqual(noExpiry.expiries, []);
 });
+
+import { quotaAvailabilityNote } from '../modules/dashboard.js';
+
+// The exact contradiction that made the symptom unfalsifiable from the panel:
+// the percentage says empty, upstream says the account may still be used, and
+// refreshing returns the same percentage forever because it is accurate.
+test('a consumed window whose account is still allowed says so', () => {
+  const note = quotaAvailabilityNote({ limit_reached: false }, { remaining_percent: 0 });
+  assert.equal(note.state, 'usable');
+  assert.match(note.text, /仍可请求/);
+});
+
+test('an enforced limit names the type and when it lifts', () => {
+  const note = quotaAvailabilityNote(
+    { limit_reached: true, rate_limit_reached_type: 'primary', available_at: '2026-09-15T09:10:00Z' },
+    { remaining_percent: 0 },
+  );
+  assert.equal(note.state, 'blocked');
+  assert.match(note.text, /上游已限流/);
+  assert.match(note.text, /primary/);
+  assert.match(note.text, /恢复/);
+});
+
+test('a healthy window carries no note at all', () => {
+  assert.deepEqual(quotaAvailabilityNote({ limit_reached: false }, { remaining_percent: 85 }), { state: '', text: '' });
+});
+
+test('an enforced limit is reported even when the percentage looks fine', () => {
+  const note = quotaAvailabilityNote({ limit_reached: true }, { remaining_percent: 40 });
+  assert.equal(note.state, 'blocked');
+});

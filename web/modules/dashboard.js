@@ -288,3 +288,19 @@ export function resetCreditSummary(snapshot = {}) {
     title: `重置额度到期时间（共 ${stamps.length} 张）：\n${stamps.map((at) => new Date(at).toLocaleString('zh-CN', { hour12: false })).join('\n')}`,
   };
 }
+
+// A used percentage and the upstream's enforcement verdict are different
+// facts, and they can disagree. Showing only the percentage reports an account
+// as out of quota while upstream still allows requests, which is unfalsifiable
+// from the panel: refreshing returns the same percentage every time.
+export function quotaAvailabilityNote(snapshot = {}, window = {}) {
+  const remaining = Number(window.remaining_percent ?? NaN);
+  const exhausted = Number.isFinite(remaining) && remaining <= 0;
+  if (snapshot.limit_reached) {
+    const until = Date.parse(snapshot.available_at || '');
+    const when = Number.isFinite(until) ? `，${new Date(until).toLocaleString('zh-CN', { hour12: false })} 恢复` : '';
+    return { state: 'blocked', text: `上游已限流${snapshot.rate_limit_reached_type ? `（${snapshot.rate_limit_reached_type}）` : ''}${when}` };
+  }
+  if (exhausted) return { state: 'usable', text: '上游报告仍可请求' };
+  return { state: '', text: '' };
+}

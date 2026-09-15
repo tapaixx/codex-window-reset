@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { accountStatusDetail, describeNextRun, describeOperation, groupHistoryBatches, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
+import { accountStatusDetail, describeNextRun, describeOperation, groupHistoryBatches, quotaAvailabilityNote, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -212,7 +212,7 @@ function bootPanel() {
       const actions = document.createElement('div'); actions.className = 'row-actions';
       const refresh = document.createElement('button'); refresh.className = 'secondary-button'; refresh.type = 'button'; refresh.textContent = '刷新'; refresh.dataset.rowAction = 'refresh'; refresh.disabled = Boolean(state.quotaBusy); refresh.addEventListener('click', () => refreshQuota([model.key], refresh)); actions.append(refresh);
       const snapshot = quota[model.key]?.snapshot || {}; const windows = snapshot.windows || []; const short = windows.find((item) => item.short) || windows[0]; const long = windows.find((item) => !item.short); const record = state.history.filter((item) => item.account_key === model.key).sort((a, b) => Date.parse(b.finished_at || b.started_at || '') - Date.parse(a.finished_at || a.started_at || ''))[0] || {};
-      const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); return wrap; })() : '--';
+      const windowText = (item) => item ? (() => { const remaining = Math.max(0, Math.min(100, Number(item.remaining_percent ?? 0))); const bar = document.createElement('span'); bar.className = 'quota-inline'; const fill = document.createElement('i'); fill.style.width = `${remaining}%`; bar.append(fill); const label = document.createElement('span'); label.textContent = `${item.remaining_percent ?? '--'}% · ${formatDate(item.reset_at)}`; const wrap = document.createElement('span'); wrap.className = 'quota-inline-wrap'; wrap.append(bar, label); const note = quotaAvailabilityNote(snapshot, item); if (note.text) { const tag = document.createElement('em'); tag.className = `quota-note quota-note-${note.state}`; tag.textContent = note.text; wrap.append(tag); } return wrap; })() : '--';
       // One probe produces one fact. Request outcome, window outcome and the
       // HTTP/latency pair described it across three columns; they are one cell
       // with the detail on hover.

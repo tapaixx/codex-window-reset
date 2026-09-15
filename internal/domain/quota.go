@@ -112,9 +112,19 @@ func (c *ResetCredit) UnmarshalJSON(data []byte) error {
 }
 
 type UsageSnapshot struct {
-	AccountKey           string        `json:"account_key"`
-	CapturedAt           time.Time     `json:"captured_at"`
-	Windows              []UsageWindow `json:"windows"`
+	AccountKey string        `json:"account_key"`
+	CapturedAt time.Time     `json:"captured_at"`
+	Windows    []UsageWindow `json:"windows"`
+	// LimitReached is the upstream's own enforcement verdict, which is not the
+	// same fact as a used percentage. The two can disagree — a window can read
+	// as fully consumed while the account is still allowed to send requests —
+	// and inferring availability from the percentage alone reports the account
+	// as out of quota when upstream says it is not.
+	LimitReached bool   `json:"limit_reached,omitempty"`
+	ReachedType  string `json:"rate_limit_reached_type,omitempty"`
+	// AvailableAt is set only when upstream says the probe-relevant model is
+	// unavailable until a given time.
+	AvailableAt          time.Time     `json:"available_at,omitempty"`
 	ResetCredits         []ResetCredit `json:"reset_credits,omitempty"`
 	ResetApplicableCount *int          `json:"reset_applicable_count,omitempty"`
 	ResetInfoComplete    bool          `json:"reset_info_complete"`
@@ -124,6 +134,7 @@ func (s UsageSnapshot) MarshalJSON() ([]byte, error) {
 	type wire UsageSnapshot
 	value := wire(s)
 	value.CapturedAt = s.CapturedAt.UTC()
+	value.AvailableAt = s.AvailableAt.UTC()
 	return json.Marshal(value)
 }
 
