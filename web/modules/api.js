@@ -271,8 +271,12 @@ export function normalizeCodexQuota(payload, { capturedAt = Date.now(), resetPay
   const windows = rawWindows.map((window) => {
     const seconds = finiteNumber(window.limit_window_seconds ?? window.limitWindowSeconds);
     const minutes = finiteNumber(window.window_minutes ?? window.windowMinutes) ?? (seconds === null ? null : seconds / 60);
-    let used = finiteNumber(window.used_percent ?? window.usedPercent ?? window.used_fraction ?? window.usedFraction);
-    if (used !== null && used >= 0 && used <= 1) used *= 100;
+    // The unit belongs to the field name. Scaling any value in [0,1] by 100
+    // cannot tell one percent from a full window, and a live response carrying
+    // used_percent 1 was read as a fully consumed window.
+    const usedPercent = finiteNumber(window.used_percent ?? window.usedPercent);
+    const usedFraction = finiteNumber(window.used_fraction ?? window.usedFraction);
+    const used = usedPercent ?? (usedFraction === null ? null : usedFraction * 100);
     const remaining = finiteNumber(window.remaining_percent ?? window.remainingPercent);
     const resetDirect = epochMillis(window.reset_at ?? window.resetAt);
     const resetAfter = finiteNumber(window.reset_after_seconds ?? window.resetAfterSeconds);

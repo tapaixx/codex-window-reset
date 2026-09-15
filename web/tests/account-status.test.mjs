@@ -131,3 +131,19 @@ test('an enforced limit is reported even when the percentage looks fine', () => 
   const note = quotaAvailabilityNote({ limit_reached: true }, { remaining_percent: 40 });
   assert.equal(note.state, 'blocked');
 });
+
+import { normalizeCodexQuota } from '../modules/api.js';
+
+// The browser-side normaliser carried the same [0,1] heuristic as the Go
+// parser: used_percent 1 became a fully consumed window.
+test('the browser normaliser reads the usage unit from the field name', () => {
+  const at = Date.parse('2026-09-15T13:46:59Z');
+  const percent = normalizeCodexQuota({ rate_limit: { primary_window: { limit_window_seconds: 18000, used_percent: 1 } } }, { capturedAt: at });
+  assert.equal(percent.windows[0].remaining_percent, 99);
+
+  const fraction = normalizeCodexQuota({ rate_limit: { primary_window: { limit_window_seconds: 18000, used_fraction: 0.3 } } }, { capturedAt: at });
+  assert.equal(fraction.windows[0].remaining_percent, 70);
+
+  const full = normalizeCodexQuota({ rate_limit: { primary_window: { limit_window_seconds: 18000, used_fraction: 1 } } }, { capturedAt: at });
+  assert.equal(full.windows[0].remaining_percent, 0);
+});

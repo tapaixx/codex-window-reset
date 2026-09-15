@@ -42,7 +42,7 @@ func TestParseUsageAcceptsCamelCaseAndArbitraryWindowLists(t *testing.T) {
 	raw := []byte(`{
 		"rateLimit": {
 			"windows": [
-				{"limitWindowSeconds": 7200, "usedPercent": 0.25, "resetAfterSeconds": 60},
+				{"limitWindowSeconds": 7200, "usedPercent": 25, "resetAfterSeconds": 60},
 				{"limitWindowSeconds": 18000, "usedPercent": 25, "resetAt": "1788973200"},
 				{"limitWindowSeconds": 604800, "usedPercent": 50, "resetAt": "2026-09-16T12:00:00Z"}
 			],
@@ -75,19 +75,56 @@ func TestParseUsageAcceptsCamelCaseAndArbitraryWindowLists(t *testing.T) {
 	}
 }
 
-func TestParseUsageAcceptsFractionAndPercentUsageEquivalently(t *testing.T) {
+// The unit belongs to the field name. Scaling any value in [0,1] by 100 cannot
+// tell one percent from a full window, and a live response carrying
+// used_percent 1 was reported as a fully consumed window on an account that
+// had 99% of it left.
+func TestParseUsageReadsTheUsageUnitFromTheFieldName(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
-	raw := []byte(`{"rate_limit":{"fraction_window":{"limit_window_seconds":3600,"used_percent":0.3},"percent_window":{"limit_window_seconds":7200,"used_percent":30}}}`)
+	cases := []struct {
+		name      string
+		field     string
+		value     string
+		remaining int
+	}{
+		{"one percent used", "used_percent", "1", 99},
+		{"thirty percent used", "used_percent", "30", 70},
+		{"a fraction of a percent", "used_percent", "0.25", 100},
+		{"fraction field is scaled", "used_fraction", "0.3", 70},
+		{"a full fraction is a full window", "used_fraction", "1", 0},
+		{"remaining stated directly", "remaining_percent", "1", 1},
+		{"remaining as a fraction", "remaining_fraction", "0.25", 25},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := []byte(`{"rate_limit":{"primary_window":{"limit_window_seconds":3600,"` + testCase.field + `":` + testCase.value + `}}}`)
+			got, err := ParseUsage(raw, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Windows[0].RemainingPercent != testCase.remaining {
+				t.Fatalf("%s=%s gave remaining %d, want %d", testCase.field, testCase.value, got.Windows[0].RemainingPercent, testCase.remaining)
+			}
+		})
+	}
+}
 
+// The exact payload the Operator hit: a nearly untouched window reported as
+// empty, with the reset timestamp rendering correctly beside it.
+func TestParseUsageKeepsANearlyUntouchedWindowFull(t *testing.T) {
+	now := time.Date(2026, 9, 15, 13, 46, 59, 0, time.UTC)
+	raw := []byte(`{"rate_limit":{"allowed":true,"limit_reached":false,
+		"primary_window":{"used_percent":1,"limit_window_seconds":18000,"reset_at":1789493450},
+		"secondary_window":{"used_percent":32,"limit_window_seconds":604800,"reset_at":1789815368}}}`)
 	got, err := ParseUsage(raw, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Windows) != 2 {
-		t.Fatalf("windows = %#v", got.Windows)
+	if got.Windows[0].RemainingPercent != 99 {
+		t.Fatalf("short window remaining = %d, want 99", got.Windows[0].RemainingPercent)
 	}
-	if got.Windows[0].RemainingPercent != 70 || got.Windows[1].RemainingPercent != 70 {
-		t.Fatalf("fraction/percent conversion = %#v", got.Windows)
+	if got.Windows[1].RemainingPercent != 68 {
+		t.Fatalf("long window remaining = %d, want 68", got.Windows[1].RemainingPercent)
 	}
 }
 

@@ -253,36 +253,45 @@ func parseWindow(candidate windowCandidate, capturedAt time.Time, limitReached b
 	}, seconds, true
 }
 
+// usagePercent reads the unit from the field name rather than guessing it from
+// the value.
+//
+// The previous rule scaled any value in [0,1] by 100 on the theory that it must
+// be a fraction. That cannot tell one percent from a full window: a live
+// response carrying used_percent 1 was read as 100% consumed, so an account
+// with 99% of its window left was reported as having none. The same misreading
+// on a long window puts remaining at 0, which is at or below the guardrail
+// floor and holds the account out of every preheat.
 func usagePercent(object map[string]any) (float64, bool) {
-	value, ok := firstAny(object, "used_percent", "usedPercent", "used", "used_fraction", "usedFraction")
-	if ok {
+	if value, ok := firstAny(object, "used_percent", "usedPercent", "used"); ok {
 		number, valid := numberValue(value)
-		if !valid || !finite(number) {
-			return 0, false
-		}
-		if number >= 0 && number <= 1 {
-			number *= 100
-		}
-		if number < 0 || number > 100 {
+		if !valid || !finite(number) || number < 0 || number > 100 {
 			return 0, false
 		}
 		return number, true
 	}
-	value, ok = firstAny(object, "remaining_percent", "remainingPercent")
-	if !ok {
-		return 0, false
+	if value, ok := firstAny(object, "used_fraction", "usedFraction"); ok {
+		number, valid := numberValue(value)
+		if !valid || !finite(number) || number < 0 || number > 1 {
+			return 0, false
+		}
+		return number * 100, true
 	}
-	remaining, valid := numberValue(value)
-	if !valid || !finite(remaining) {
-		return 0, false
+	if value, ok := firstAny(object, "remaining_percent", "remainingPercent"); ok {
+		remaining, valid := numberValue(value)
+		if !valid || !finite(remaining) || remaining < 0 || remaining > 100 {
+			return 0, false
+		}
+		return 100 - remaining, true
 	}
-	if remaining >= 0 && remaining <= 1 {
-		remaining *= 100
+	if value, ok := firstAny(object, "remaining_fraction", "remainingFraction"); ok {
+		remaining, valid := numberValue(value)
+		if !valid || !finite(remaining) || remaining < 0 || remaining > 1 {
+			return 0, false
+		}
+		return 100 - remaining*100, true
 	}
-	if remaining < 0 || remaining > 100 {
-		return 0, false
-	}
-	return 100 - remaining, true
+	return 0, false
 }
 
 func resetAtFromWindow(window map[string]any, capturedAt time.Time) time.Time {
