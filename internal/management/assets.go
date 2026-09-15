@@ -168,6 +168,7 @@ func Registration(pluginID string) RegistrationResult {
 	prefix := "/plugins/" + id
 	routes := []Route{
 		{Method: "GET", Path: prefix + "/status"},
+		{Method: "GET", Path: prefix + "/upcoming"},
 		{Method: "GET", Path: prefix + "/accounts"},
 		{Method: "GET", Path: prefix + "/schedule"},
 		{Method: "PUT", Path: prefix + "/schedule"},

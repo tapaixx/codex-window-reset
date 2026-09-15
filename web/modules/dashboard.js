@@ -93,3 +93,47 @@ export function projectAccountRow(account = {}, { quota = {}, history = [], hidd
     error: String(quota?.refresh_error_code || record.error_code || account.status_message || ''),
   };
 }
+
+// The panel's highest-consequence silent failure is automatic preheating that
+// has stopped without anything on screen changing. describeNextRun turns the
+// upcoming view into one line that always states which of those situations is
+// true, so "nothing scheduled" can never be mistaken for "not yet due".
+export function describeNextRun(view = {}, now = Date.now()) {
+  if (view.store_error_code) {
+    return { state: 'error', text: `下一次预热 · 读取计划状态失败（${view.store_error_code}）` };
+  }
+  if (!view.enabled) {
+    return { state: 'off', text: '下一次预热 · 计划未启用' };
+  }
+  const at = Date.parse(view.next_run_at || '');
+  if (!Number.isFinite(at)) {
+    return { state: 'alarm', text: '下一次预热 · 计划已启用，但没有任何待执行的预热' };
+  }
+  const batch = (view.batches || []).find((item) => (item.occurrences || []).some((slot) => Date.parse(slot.planned_at || '') === at));
+  const accounts = batch ? (batch.occurrences || []).length : 0;
+  const minutes = Math.round((at - now) / 60000);
+  const clock = new Date(at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  const day = dayPrefix(at, now);
+  const parts = [`下一次预热 · ${day}${clock}`];
+  if (accounts > 0) parts.push(`${accounts} 个账号`);
+  parts.push(relativeFromNow(minutes));
+  // A horizon that is armed but a day out is the shape a stalled scheduler
+  // leaves behind, so it is surfaced rather than read as a normal quiet day.
+  return { state: minutes > 24 * 60 ? 'distant' : 'ready', text: parts.join(' · ') };
+}
+
+function dayPrefix(at, now) {
+  const start = (value) => { const date = new Date(value); date.setHours(0, 0, 0, 0); return date.getTime(); };
+  const days = Math.round((start(at) - start(now)) / 86400000);
+  if (days <= 0) return '今天 ';
+  if (days === 1) return '明天 ';
+  return `${new Date(at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })} `;
+}
+
+function relativeFromNow(minutes) {
+  if (minutes <= 0) return '即将执行';
+  if (minutes < 60) return `${minutes} 分钟后`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时后`;
+  return `${Math.floor(hours / 24)} 天后`;
+}

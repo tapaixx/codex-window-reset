@@ -75,6 +75,15 @@ func (r *Router) handleManagement(request Request, endpoint, correlationID strin
 		}
 		return successResponse(result, correlationID)
 
+	case "/upcoming":
+		if method != "GET" {
+			return errorResponseWithHeaders(methodError("GET"), correlationID, map[string]string{"Allow": "GET"})
+		}
+		if r.runtime == nil {
+			return errorResponse(domainError(domain.CodeStoreCorrupt, 500, false, "runtime is unavailable"), correlationID)
+		}
+		return successResponse(r.runtime.Upcoming(), correlationID)
+
 	case "/accounts":
 		if method != "GET" {
 			return errorResponseWithHeaders(methodError("GET"), correlationID, map[string]string{"Allow": "GET"})

@@ -144,3 +144,50 @@ ID 格式上，而该格式已因 v0.0.16 的批次重编号改动过一次。
 4. 模拟器副标题措辞修正。
 
 1 与 2 已能独立交付本组件的全部可观测性价值；3 是排期展示，4 是防误读。
+
+## 实施记录 · 第 1、2 步（2026-09-15）
+
+已实现后端与第一层，第三、四步未动。
+
+### 与本文原设计的两处偏离
+
+1. **`masked_identity` 不由 `/upcoming` 返回。** 原文写「遮罩身份与 guardrail
+   状态本就在服务端，放在这里最省事」——对 guardrail 成立（在 runtime state
+   里，零额外调用），对遮罩身份不成立：它需要一次账号发现（host 调用），而面板
+   每次载入本就已经取过账号列表。多这一次发现与 v0.0.19「削减重复账号发现」的
+   方向相悖。改为只返回 `account_key`，由前端与已有账号列表做一次 map join。
+   真正要避免的耦合是「前端解析不透明的 occurrence ID」，这一点仍然守住了。
+
+2. **`next_run_at` 放在 `/upcoming` 而非 `/status`。** 原文的理由是「避免为一行
+   文字拉取整个列表」，但视野内批次很少、载荷只有几 KB，且面板本就并行拉取多个
+   端点。为同一事实开两个来源不值得，因此单一来源为 `/upcoming`，`/status` 不变。
+
+### 已落地
+
+- `domain.UpcomingView` / `UpcomingBatch` / `UpcomingOccurrence`
+  （`internal/domain/upcoming.go`），`blocked_reason` 目前仅有 `guardrail_hold`。
+- `Runtime.Upcoming()`（`internal/app/upcoming.go`）：以 **NextRuns 为「已挂定时器」
+  的权威**，而非 occurrence 表——没有 NextRuns 条目的槽位不会触发，而这正是重启
+  缺陷能够静默破坏的地方。仅纳入 `planned` 状态；`failed` 上的 NextRuns 条目是
+  补偿重试，属于另一个概念。
+- `GET /upcoming` 管理端点与路由注册。
+- 第一层：摘要条首位的 `#next-run`，五种状态
+  off / ready / distant / alarm / error，由纯函数 `describeNextRun()` 决定
+  （`web/modules/dashboard.js`）。
+
+### 已知口径
+
+时间按**浏览器本地时区**格式化，与面板既有的 `formatDate` 一致，而非按
+`config.timezone`。本次不引入第二套时区策略；如需改为按配置时区显示，应作为一次
+独立的全面板改动。
+
+### 验证
+
+- Go：4 个 `Upcoming` 回归（分组与错峰顺序、只纳入已挂定时器的 planned 槽位、
+  guardrail 标注且不预测额度、空/未启用/不可读三者可区分）。前两个已用变异测试
+  反证——改成遍历 occurrence 表或去掉 guardrail 判断后确实失败。
+- 前端：`web/tests/upcoming.test.mjs` 6 项（含「7 天后」那条真实故障形态）。
+- 浏览器：`audit-next-run`（1440）与 `audit-next-run-narrow`（375），后者额外断言
+  最长的告警文案不会撑破页面。
+- 全量：`gofmt`/`go vet`/`go build`/`go test`/`go test -race` 干净；
+  `node --test` 78 通过 0 失败。

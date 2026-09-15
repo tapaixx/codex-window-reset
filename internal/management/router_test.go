@@ -14,6 +14,7 @@ func TestRegistrationDeclaresEveryExactRouteAndAsset(t *testing.T) {
 	got := Registration("codex-window-reset-linux-amd64")
 	assertRouteSet(t, got.Routes, map[string]string{
 		"GET /plugins/codex-window-reset-linux-amd64/status":         "",
+		"GET /plugins/codex-window-reset-linux-amd64/upcoming":       "",
 		"GET /plugins/codex-window-reset-linux-amd64/accounts":       "",
 		"GET /plugins/codex-window-reset-linux-amd64/schedule":       "",
 		"PUT /plugins/codex-window-reset-linux-amd64/schedule":       "",
@@ -147,10 +148,12 @@ func assertResourcePaths(t *testing.T, got []Resource, want []string) {
 }
 
 type testRuntime struct {
-	status domain.StatusView
+	status   domain.StatusView
+	upcoming domain.UpcomingView
 }
 
-func (r testRuntime) Status() domain.StatusView { return r.status }
+func (r testRuntime) Status() domain.StatusView     { return r.status }
+func (r testRuntime) Upcoming() domain.UpcomingView { return r.upcoming }
 
 func (testRuntime) ListAccounts(context.Context) ([]accounts.Account, error) { return nil, nil }
 func (testRuntime) Schedule() domain.Config                                  { return domain.DefaultConfig() }

@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { groupHistoryBatches, projectAccountRow, summarizeOperations } from './dashboard.js';
+import { describeNextRun, groupHistoryBatches, projectAccountRow, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -70,7 +70,7 @@ function createCell(label, content, className = '') {
 }
 
 function bootPanel() {
-  const state = { status: {}, accounts: [], schedule: {}, quota: [], history: [], selected: new Set(), scheduledKeys: new Set(), hidden: true, skipTimes: [], probeIntent: null, simulationTimer: null, simulationGeneration: 0 };
+  const state = { status: {}, upcoming: null, accounts: [], schedule: {}, quota: [], history: [], selected: new Set(), scheduledKeys: new Set(), hidden: true, skipTimes: [], probeIntent: null, simulationTimer: null, simulationGeneration: 0 };
   text('#simulation-output', '正在准备模拟器…');
   syncHostTheme();
 
@@ -86,6 +86,7 @@ function bootPanel() {
     if (guardrail) guardrail.dataset.state = summary.guardrail > 0 ? 'active' : 'idle';
     text('#selection-count', `已选择 ${state.selected.size} 个账号`);
     renderFreshness();
+    renderNextRun();
     renderFirstRun();
     const allSelectable = state.accounts.filter((account) => !account.disabled);
     const all = $('#select-all-checkbox');
@@ -105,6 +106,14 @@ function bootPanel() {
     node.dataset.state = minutes >= 30 ? 'stale' : minutes >= 5 ? 'aging' : 'fresh';
     node.textContent = `额度快照 · ${minutes < 1 ? '刚刚' : minutes < 60 ? `${minutes} 分钟前` : `${Math.floor(minutes / 60)} 小时前`}`;
     if (stamps.length < state.accounts.length) node.textContent += `（${state.accounts.length - stamps.length} 个账号尚无快照）`;
+  }
+
+  function renderNextRun() {
+    const node = $('#next-run'); if (!node) return;
+    const view = state.upcoming || { enabled: state.schedule?.enabled, store_error_code: state.status?.store_error_code, batches: [] };
+    const described = describeNextRun(view, Date.now());
+    node.dataset.state = described.state;
+    node.textContent = described.text;
   }
 
   // A fresh install is inert by design, which reads as "nothing is happening".
@@ -298,6 +307,7 @@ function bootPanel() {
     try {
       $('#connection').dataset.state = 'loading'; text('#connection', '正在加载数据…');
       const statusJob = request('/status').then((status) => { state.status = status; renderSummary(); });
+      const upcomingJob = request('/upcoming').then((upcoming) => { state.upcoming = upcoming; renderSummary(); });
       const accountsJob = hostManagementRequest('/auth-files').then((files) => {
         if ((state.accountsGeneration || 0) !== accountsGeneration) return;
         state.accounts = normalizeHostAuthFiles(files);
@@ -309,7 +319,7 @@ function bootPanel() {
         if ((state.quotaGeneration || 0) === quotaGeneration) { state.quota = quota; renderAccounts(); }
       });
       const historyJob = request('/history').then((history) => { state.history = history; renderHistory(); renderAccounts(); });
-      const jobs = await Promise.allSettled([statusJob, accountsJob, scheduleJob, quotaJob, historyJob]);
+      const jobs = await Promise.allSettled([statusJob, upcomingJob, accountsJob, scheduleJob, quotaJob, historyJob]);
       updateDraftStatus();
       const failed = jobs.find((job) => job.status === 'rejected');
       $('#connection').dataset.state = failed ? 'error' : 'ready';

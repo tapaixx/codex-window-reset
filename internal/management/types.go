@@ -57,6 +57,7 @@ type RegistrationResult struct {
 // authentication and credential material are outside this interface.
 type RuntimeAPI interface {
 	Status() domain.StatusView
+	Upcoming() domain.UpcomingView
 	ListAccounts(context.Context) ([]accounts.Account, error)
 	Schedule() domain.Config
 	UpdateSchedule(context.Context, domain.Config) (domain.Config, error)

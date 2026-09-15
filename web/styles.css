@@ -116,3 +116,13 @@ html[data-theme=dark] .probe-pill.bad{color:#ffd099;background:var(--orange-soft
 html[data-theme=dark] :is(.first-run,.first-run-steps li){background:var(--surface-2);border-color:var(--line)}
 html[data-theme=dark] :is(.first-run-head strong,.first-run-steps li){color:var(--ink)}
 html[data-theme=dark] :is(.simulation-workspace .simulation-assumptions,.simulation-assumptions span){color:var(--muted)}
+
+/* --- Next run (upcoming preheat, tier 1) --- */
+.summary-strip .next-run{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:#475467;font-size:11px;font-weight:600;white-space:nowrap}
+.summary-strip .next-run:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.summary-strip .next-run[data-state=ready]{color:#087a51;border-color:#a6e0c8;background:var(--green-soft)}
+.summary-strip .next-run[data-state=off]{color:var(--muted)}
+.summary-strip .next-run[data-state=distant]{color:#8a4c09;border-color:#f2c776;background:var(--orange-soft)}
+.summary-strip .next-run[data-state=alarm],.summary-strip .next-run[data-state=error]{color:#bd3035;border-color:#f3c0c2;background:var(--red-soft)}
+html[data-theme=dark] .summary-strip .next-run{background:var(--surface-2);color:var(--ink)}
+html[data-theme=dark] .summary-strip .next-run[data-state=off]{color:var(--muted)}

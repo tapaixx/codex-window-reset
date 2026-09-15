@@ -358,12 +358,14 @@ func contractRuntimeFixture() *contractRuntime {
 
 type contractRuntime struct {
 	status   domain.StatusView
+	upcoming domain.UpcomingView
 	accounts []accounts.Account
 	quota    []domain.SnapshotView
 	history  []domain.OperationRecord
 }
 
-func (r *contractRuntime) Status() domain.StatusView { return r.status }
+func (r *contractRuntime) Status() domain.StatusView     { return r.status }
+func (r *contractRuntime) Upcoming() domain.UpcomingView { return r.upcoming }
 func (r *contractRuntime) ListAccounts(context.Context) ([]accounts.Account, error) {
 	return r.accounts, nil
 }

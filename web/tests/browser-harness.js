@@ -155,6 +155,21 @@ async function checkUIAudit(mode) {
     await configure({ zeroGain: true }); set('window_hours', '24');
     await waitFor(() => $('.sim-metrics')?.textContent.includes('当前参数下无额外收益'), 'zero gain not explained');
     assert(!$('.sim-metric.gain'), 'zero gain presented as positive');
+  } else if (mode === 'audit-next-run' || mode === 'audit-next-run-narrow') {
+    // The line must read as an alarm, not as a quiet day, when the schedule is
+    // on but nothing is armed — that is the shape a stalled scheduler leaves.
+    await waitFor(() => $('#next-run'), 'next run line missing');
+    assert($('#next-run').dataset.state === 'off', `disabled schedule state=${$('#next-run').dataset.state}`);
+    const soon = new Date(Date.now() + 90 * 60000).toISOString();
+    await configure({ upcoming: { enabled: true, next_run_at: soon, batches: [{ local_date: '2026-09-15', period_index: 1, occurrences: [{ account_key: 'acct-browser', planned_at: soon }, { account_key: 'acct-two', planned_at: new Date(Date.now() + 95 * 60000).toISOString() }] }] } });
+    await reloadUntil(() => $('#next-run').dataset.state === 'ready' && $('#next-run').textContent.includes('2 个账号'), 'armed run not reported');
+    assert($('#next-run').textContent.includes('小时后'), `relative distance missing: ${$('#next-run').textContent}`);
+    await configure({ upcoming: { enabled: true, batches: [] } });
+    await reloadUntil(() => $('#next-run').dataset.state === 'alarm', 'enabled-but-empty schedule not flagged');
+    assert($('#next-run').textContent.includes('没有任何待执行的预热'), 'alarm does not say what is wrong');
+    // The longest state must not push the summary strip off screen.
+    assert(document.documentElement.scrollWidth <= innerWidth + 1, `alarm line overflows the page: ${document.documentElement.scrollWidth} > ${innerWidth}`);
+    assert($('#next-run').getBoundingClientRect().right <= innerWidth + 1, 'alarm line is clipped at the viewport edge');
   } else if (mode === 'audit-accessibility') {
     assert($('[data-account-selection]').getBoundingClientRect().width > 0, 'mobile individual account checkbox is hidden');
     const skip = $('#skip-window-input');
@@ -246,6 +261,18 @@ async function waitFor(predicate, message, timeout = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(message);
+}
+
+// loadPanel() ignores a reload requested while one is already in flight, so a
+// single click can be silently dropped. Keep asking until the panel shows the
+// new server state.
+async function reloadUntil(predicate, message) {
+  return waitFor(async () => {
+    if (predicate()) return true;
+    document.querySelector('[data-action="refresh-panel"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return predicate();
+  }, message);
 }
 
 async function fixtureState() {

@@ -146,6 +146,7 @@ for (const [mode, width] of [
   ['audit-refresh-progress', 1440], ['audit-background-refresh', 1440], ['audit-history-batches', 375],
   ['audit-draft', 1440], ['audit-validation', 1440], ['audit-axis', 1440],
   ['audit-accessibility', 375], ['audit-theme-dark', 1440], ['audit-navigation', 1440], ['audit-zero-gain', 1440],
+  ['audit-next-run', 1440], ['audit-next-run-narrow', 375],
 ]) {
   test(`ui audit regression: ${mode}`, { skip: browserSkip }, async () => {
     const fixture = await startFixtureServer();
@@ -267,6 +268,10 @@ async function startFixtureServer() {
 async function serveManagementFixture(request, response, path, state) {
   if (request.method === 'GET' && path.endsWith('/status')) {
     jsonResponse(response, 200, { ok: true, result: { enabled: false, next_runs: {}, run_id: '', run_completed: 0, run_total: 0 } });
+    return;
+  }
+  if (request.method === 'GET' && path.endsWith('/upcoming')) {
+    jsonResponse(response, 200, { ok: true, result: state.controls?.upcoming || { enabled: false, batches: [] } });
     return;
   }
       if (request.method === 'GET' && path.endsWith('/accounts')) {
