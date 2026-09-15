@@ -31,10 +31,20 @@ func TestRuntimeStartMarksPersistedPreheatMissed(t *testing.T) {
 func TestRuntimeStartRecoversWithCorruptConfigWithoutActivatingSchedule(t *testing.T) {
 	now := time.Date(2026, 9, 9, 6, 30, 0, 0, time.UTC)
 	id := "2026-09-09/p0/a"
+	// The elapsed slot is the one ADR-0015 retires; the later window must
+	// survive, or a restart leaves the plugin with nothing left to run.
+	future := "2026-09-09/p1/a"
 	state := &task7StateRepository{state: domain.RuntimeState{Occurrences: map[string]domain.OccurrenceState{
 		id: {
-			PlannedOccurrence: domain.PlannedOccurrence{ID: id, AccountKey: "a", PlannedAt: now.Add(time.Hour)},
+			PlannedOccurrence: domain.PlannedOccurrence{ID: id, AccountKey: "a", PlannedAt: now.Add(-time.Hour)},
 			Status:            domain.OccurrencePlanned,
+		},
+		future: {
+			PlannedOccurrence: domain.PlannedOccurrence{
+				ID: future, AccountKey: "a", PeriodIndex: 1,
+				WindowStart: now.Add(4 * time.Hour), WindowEnd: now.Add(5 * time.Hour), PlannedAt: now.Add(4 * time.Hour),
+			},
+			Status: domain.OccurrencePlanned,
 		},
 	}}}
 	configErr := &domain.Error{Code: domain.CodeStoreCorrupt, Message: "config is corrupt"}
@@ -56,6 +66,9 @@ func TestRuntimeStartRecoversWithCorruptConfigWithoutActivatingSchedule(t *testi
 	got, ok := state.Occurrence(id)
 	if !ok || got.Status != domain.OccurrenceMissed {
 		t.Fatalf("state=%#v, found=%t", got, ok)
+	}
+	if got, ok := state.Occurrence(future); !ok || got.Status != domain.OccurrencePlanned {
+		t.Fatalf("later window retired by restart: state=%#v, found=%t", got, ok)
 	}
 	status := runtime.Status()
 	if status.StoreErrorCode != domain.CodeStoreCorrupt {

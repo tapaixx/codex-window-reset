@@ -357,16 +357,105 @@ func TestSchedulerUpgradeDoesNotReplayRenumberedLegacyBatch(t *testing.T) {
 
 func TestStartupMarksEveryUnexecutedPastPlanMissed(t *testing.T) {
 	now := schedulerInstant("2026-09-09T06:30:00Z")
-	state := domain.RuntimeState{Occurrences: map[string]domain.OccurrenceState{
-		"2026-09-09/p0/a": {PlannedOccurrence: domain.PlannedOccurrence{ID: "2026-09-09/p0/a", PlannedAt: schedulerInstant("2026-09-09T06:45:00Z")}, Status: domain.OccurrencePlanned},
-	}}
+	state := domain.RuntimeState{
+		Occurrences: map[string]domain.OccurrenceState{
+			"2026-09-09/p0/a": {PlannedOccurrence: domain.PlannedOccurrence{ID: "2026-09-09/p0/a", PlannedAt: schedulerInstant("2026-09-09T06:15:00Z")}, Status: domain.OccurrencePlanned},
+		},
+		NextRuns: map[string]time.Time{"2026-09-09/p0/a": schedulerInstant("2026-09-09T06:15:00Z")},
+	}
 	fx := newSchedulerFixture(t, now, state)
 	fx.scheduler.Start()
 	defer fx.scheduler.Stop()
-	got := fx.states.saved().Occurrences["2026-09-09/p0/a"]
+	saved := fx.states.saved()
+	got := saved.Occurrences["2026-09-09/p0/a"]
 	if got.Status != domain.OccurrenceMissed || len(fx.executor.Calls()) != 0 {
 		t.Fatalf("state=%#v calls=%d", got, len(fx.executor.Calls()))
 	}
+	if _, armed := saved.NextRuns["2026-09-09/p0/a"]; armed {
+		t.Fatalf("missed occurrence kept a next run: %#v", saved.NextRuns)
+	}
+}
+
+// ADR-0015 scopes missed marking to a window that has begun or elapsed. A
+// restart that discarded every later window too left the plugin permanently
+// inert: nothing revived those slots, so no preheat ever ran again.
+func TestStartupKeepsFuturePlansAndStillFiresThem(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	occurrence := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(time.Hour), WindowStart: now.Add(30 * time.Minute), WindowEnd: now.Add(2 * time.Hour),
+	}
+	state := domain.RuntimeState{
+		Occurrences: map[string]domain.OccurrenceState{occurrence.ID: {PlannedOccurrence: occurrence, Status: domain.OccurrencePlanned}},
+		NextRuns:    map[string]time.Time{occurrence.ID: occurrence.PlannedAt},
+	}
+	fx := newSchedulerFixture(t, now, state)
+	fx.planner.plans["2026-09-09"] = []domain.PlannedOccurrence{occurrence}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if got := fx.states.saved().Occurrences[occurrence.ID]; got.Status != domain.OccurrencePlanned {
+		t.Fatalf("status after restart=%s, want planned", got.Status)
+	}
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	fx.clock.Advance(time.Hour)
+	select {
+	case <-fx.executor.entered:
+	case <-time.After(time.Second):
+		t.Fatalf("future occurrence never fired after restart: calls=%d", len(fx.executor.Calls()))
+	}
+}
+
+// Recovery path for state written by a build that marked the whole future
+// missed: such a slot has never sent a request, so one whose window has not
+// begun is re-armed by reconcile instead of staying dead forever.
+func TestReconcileRevivesFutureMissedOccurrenceButNotPastDueOne(t *testing.T) {
+	now := schedulerInstant("2026-09-09T06:30:00Z")
+	future := domain.PlannedOccurrence{
+		ID: "2026-09-09/p1/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 1,
+		PlannedAt: now.Add(time.Hour), WindowStart: now.Add(30 * time.Minute), WindowEnd: now.Add(2 * time.Hour),
+	}
+	past := domain.PlannedOccurrence{
+		ID: "2026-09-09/p0/a", AccountKey: "a", LocalDate: "2026-09-09", PeriodIndex: 0,
+		PlannedAt: now.Add(-time.Hour), WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-30 * time.Minute),
+	}
+	state := domain.RuntimeState{Occurrences: map[string]domain.OccurrenceState{
+		future.ID: {PlannedOccurrence: withMissed(future), Status: domain.OccurrenceMissed},
+		past.ID:   {PlannedOccurrence: withMissed(past), Status: domain.OccurrenceMissed},
+	}}
+	fx := newSchedulerFixture(t, now, state)
+	fx.planner.plans["2026-09-09"] = []domain.PlannedOccurrence{future, past}
+	fx.scheduler.Start()
+	defer fx.scheduler.Stop()
+	if err := fx.scheduler.Reconcile(schedulerTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	saved := fx.states.saved()
+	if got := saved.Occurrences[future.ID]; got.Status != domain.OccurrencePlanned || got.PlannedOccurrence.Missed {
+		t.Fatalf("future missed occurrence not revived: %#v", got)
+	}
+	if got := saved.Occurrences[past.ID]; got.Status != domain.OccurrenceMissed {
+		t.Fatalf("past-due occurrence caught up: %#v", got)
+	}
+	if _, armed := saved.NextRuns[past.ID]; armed {
+		t.Fatalf("past-due occurrence armed a timer: %#v", saved.NextRuns)
+	}
+	fx.clock.Advance(time.Hour)
+	select {
+	case <-fx.executor.entered:
+	case <-time.After(time.Second):
+		t.Fatalf("revived occurrence never fired: calls=%d", len(fx.executor.Calls()))
+	}
+	if got := fx.executor.Calls(); len(got) != 1 || got[0].ID != future.ID {
+		t.Fatalf("executor calls=%#v, want only %s", got, future.ID)
+	}
+}
+
+func withMissed(plan domain.PlannedOccurrence) domain.PlannedOccurrence {
+	plan.Missed = true
+	plan.MissedReason = "restart"
+	return plan
 }
 
 func TestFutureOccurrenceFiresExactlyOnce(t *testing.T) {

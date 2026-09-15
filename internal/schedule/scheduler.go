@@ -141,11 +141,14 @@ func NewScheduler(clock domain.Clock, planner PlanSource, states RuntimeStateRep
 	}
 }
 
-// Start recovers ownership synchronously before exposing timer callbacks. Any
-// occurrence left planned/running by a previous process is marked missed;
-// this deliberately includes occurrences whose nominal window has not yet
-// elapsed, so a restart can never catch up changed timing. A pending
-// compensation also loses its prior timer ownership and is marked missed.
+// Start recovers ownership synchronously before exposing timer callbacks.
+// ADR-0015 scopes the missed marking to a Preheat Window that has already
+// begun or elapsed — unexecuted occurrences there are missed even if part of
+// the window remains, because their timing changed while the Operator could
+// not observe it. A running occurrence and a pending compensation also lose
+// their prior timer ownership. An occurrence whose window has not started is
+// untouched: the reconcile pass that follows re-arms it, so a restart cancels
+// the current window, never the rest of the planning horizon.
 func (s *Scheduler) Start() {
 	if s == nil {
 		return
@@ -163,13 +166,16 @@ func (s *Scheduler) Start() {
 	s.lifecycleMu.Unlock()
 
 	if s.states != nil {
+		now := s.clock.Now().UTC()
 		startErr := s.states.Update(func(state *domain.RuntimeState) error {
 			ensureRuntimeStateMaps(state)
 			for id, occurrence := range state.Occurrences {
-				if occurrence.Status == domain.OccurrencePlanned || occurrence.Status == domain.OccurrenceRunning ||
+				if occurrence.Status == domain.OccurrencePlanned && windowStarted(occurrence.PlannedOccurrence, now) ||
+					occurrence.Status == domain.OccurrenceRunning ||
 					(!occurrence.CompensationAttempted && !occurrence.CompensationDueAt.IsZero()) {
 					markMissed(&occurrence, "restart")
 					state.Occurrences[id] = occurrence
+					delete(state.NextRuns, id)
 				}
 			}
 			return nil
@@ -391,7 +397,14 @@ func (s *Scheduler) reconcileOwned(config domain.Config) error {
 			plan.PlannedAt = plan.PlannedAt.UTC()
 			desired[id] = struct{}{}
 			if existing, exists := state.Occurrences[id]; exists {
-				if existing.Status == domain.OccurrencePlanned {
+				// A slot marked missed has never sent a request, so one whose
+				// planned instant is still ahead can be re-armed. This recovers
+				// horizons abandoned by older builds, which marked the entire
+				// future missed on restart, and never catches up an occurrence
+				// whose instant has already passed.
+				revivable := existing.Status == domain.OccurrenceMissed &&
+					!plan.Missed && !windowStarted(plan, now)
+				if existing.Status == domain.OccurrencePlanned || revivable {
 					// A stable identity represents the same logical slot, not an
 					// immutable instant. Refresh the planned payload so a config
 					// change moves both persistence and timer ownership together.
@@ -866,6 +879,16 @@ func scheduledForConfig(config domain.Config, accountKey string) bool {
 		}
 	}
 	return false
+}
+
+// windowStarted reports whether an occurrence's Preheat Window has begun or
+// elapsed, which is the boundary ADR-0015 uses for missed work. The planned
+// instant is the fallback for occurrences persisted without window bounds.
+func windowStarted(plan domain.PlannedOccurrence, now time.Time) bool {
+	if !plan.WindowStart.IsZero() {
+		return !plan.WindowStart.UTC().After(now)
+	}
+	return plan.PlannedAt.IsZero() || !plan.PlannedAt.UTC().After(now)
 }
 
 func markMissed(state *domain.OccurrenceState, reason string) {
