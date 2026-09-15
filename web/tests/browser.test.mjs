@@ -364,7 +364,10 @@ function quotaView(accountKey = 'acct-browser', credits = null) {
       reset_info_complete: true,
       reset_applicable_count: credits?.applicable_available_count ?? 2,
       reset_credits: credits?.credits,
-      windows: [{ short: true, duration_minutes: 60, remaining_percent: 80 }],
+      limit_reached: credits?.limit_reached ?? false,
+      rate_limit_reached_type: credits?.rate_limit_reached_type,
+      available_at: credits?.available_at,
+      windows: [{ short: true, duration_minutes: 60, remaining_percent: credits?.remaining_percent ?? 80 }],
     },
   };
 }

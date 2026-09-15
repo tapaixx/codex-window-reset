@@ -107,7 +107,18 @@ async function checkUIAudit(mode) {
     assert($('#accounts-table [data-account-key="acct-disabled"]')?.textContent.includes('80%'), 'disabled account was not refreshed');
     assert(!/没有可刷新的已启用账号/.test($('#account-feedback').textContent), 'disabled account was incorrectly reported as skipped');
   } else if (mode === 'audit-refresh-failure') {
-    await configure({ failAuthIndexes: ['browser'] }); await refresh();
+    // A consumed window whose account upstream still allows must say so: the
+    // percentage alone reports it as out of quota and cannot be checked.
+    await configure({ resetCredits: { remaining_percent: 0, limit_reached: false } });
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => $('#accounts-table .quota-note'), 'availability note never rendered');
+    assert($('#accounts-table .quota-note').textContent.includes('仍可请求'), `note=${$('#accounts-table .quota-note').textContent}`);
+    assert($('#accounts-table .quota-note').classList.contains('quota-note-usable'), 'a usable account is styled as blocked');
+    await configure({ resetCredits: { remaining_percent: 0, limit_reached: true, rate_limit_reached_type: 'primary', available_at: '2026-09-15T09:10:00Z' } });
+    $('[data-action="refresh-all-quota"]').click();
+    await waitFor(() => $('#accounts-table .quota-note-blocked'), 'enforced limit never reported');
+    assert($('#accounts-table .quota-note').textContent.includes('上游已限流') && $('#accounts-table .quota-note').textContent.includes('primary'), `blocked note=${$('#accounts-table .quota-note').textContent}`);
+    await configure({ resetCredits: null, failAuthIndexes: ['browser'] }); await refresh();
     assert(/失败\s*1/.test($('#account-feedback').textContent), 'all-failure summary missing');
     assert(!/全部.*刷新|刷新全部额度/.test($('#feedback').textContent), 'failed request announced success');
     await configure({ authFailure: true }); await refresh();
