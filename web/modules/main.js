@@ -1,6 +1,6 @@
 import { renderSimulationComparison } from './timeline.js';
 import { hostManagementRequest, normalizeHostAuthFiles, refreshAccountQuotas, request, requestErrorMessage } from './api.js';
-import { accountStatusDetail, describeNextRun, describeOperation, groupHistoryBatches, quotaAvailabilityNote, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
+import { accountStatusDetail, describeNextRun, describeOperation, groupHistoryBatches, quotaAvailabilityNote, requestWasSent, resetCreditSummary, projectAccountRow, projectUpcomingBatches, summarizeOperations } from './dashboard.js';
 
 export function syncHostTheme({ root = globalThis.document?.documentElement, parentRoot, parentDocument, windowRef = globalThis.window, observe = true } = {}) {
   if (!root) return () => {};
@@ -53,9 +53,15 @@ export function lastProbeCell(record = {}) {
   if (!record.request_outcome) return '--';
   const wrap = document.createElement('span'); wrap.className = 'probe-cell';
   const pill = document.createElement('span');
-  pill.className = `probe-pill ${record.request_outcome === 'succeeded' ? 'ok' : 'bad'}`;
-  pill.textContent = probeOutcomeLabels[record.request_outcome] || record.request_outcome;
-  const detail = [windowOutcomeLabels[record.window_outcome] || record.window_outcome, record.http_status ? `HTTP ${record.http_status}` : '', record.latency_ms ? `${record.latency_ms} ms` : ''].filter(Boolean).join(' · ');
+  // A "disabled" request outcome means no request was sent, not that the
+  // account is disabled. Labelling it 已停用 put a red badge on a perfectly
+  // healthy credential whose last scheduled slot was simply skipped.
+  const sent = requestWasSent(record);
+  pill.className = `probe-pill ${record.request_outcome === 'succeeded' ? 'ok' : sent ? 'bad' : 'idle'}`;
+  pill.textContent = sent ? (probeOutcomeLabels[record.request_outcome] || record.request_outcome) : '未发送';
+  const detail = sent
+    ? [windowOutcomeLabels[record.window_outcome] || record.window_outcome, record.http_status ? `HTTP ${record.http_status}` : '', record.latency_ms ? `${record.latency_ms} ms` : ''].filter(Boolean).join(' · ')
+    : (decisionLabels[record.decision] || record.decision || '');
   const note = document.createElement('small'); note.className = 'probe-detail'; note.textContent = detail || '--';
   wrap.title = [pill.textContent, detail].filter(Boolean).join(' · ');
   wrap.append(pill, note);

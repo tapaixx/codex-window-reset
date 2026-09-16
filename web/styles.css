@@ -150,3 +150,5 @@ html[data-theme=dark] .status-unknown{color:var(--muted);background:var(--surfac
 .quota-note{display:block;font-style:normal;font-size:9px;line-height:1.4}
 .quota-note-usable{color:#087a51}
 .quota-note-blocked{color:#bd3035}
+.probe-pill.idle{color:#667085;background:#eef1f6}
+html[data-theme=dark] .probe-pill.idle{color:var(--muted);background:var(--surface-2)}

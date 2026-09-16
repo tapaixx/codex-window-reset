@@ -177,7 +177,10 @@ type task7Quota struct {
 	getCalls       int
 	refreshEntered chan struct{}
 	refreshRelease chan struct{}
-	decision       domain.QuotaDecision
+	// sequence, when set, is consumed one entry per Refresh so a test can model
+	// upstream usage catching up after the request that opened a window.
+	sequence []domain.UsageSnapshot
+	decision domain.QuotaDecision
 }
 
 func (q *task7Quota) Refresh(ctx context.Context, account accounts.Account) (domain.UsageSnapshot, error) {
@@ -190,6 +193,12 @@ func (q *task7Quota) Refresh(ctx context.Context, account accounts.Account) (dom
 	}
 	entered, release := q.refreshEntered, q.refreshRelease
 	snapshot := q.snapshots[key]
+	if len(q.sequence) > 0 {
+		snapshot = q.sequence[0]
+		if len(q.sequence) > 1 {
+			q.sequence = q.sequence[1:]
+		}
+	}
 	err := q.errors[key]
 	q.mu.Unlock()
 	if entered != nil {

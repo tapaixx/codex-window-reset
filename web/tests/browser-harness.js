@@ -207,6 +207,15 @@ async function checkUIAudit(mode) {
     assert(items[1].includes('Guardrail Hold'), `guardrail skip not named: ${items[1]}`);
     assert(items[1].split('Guardrail Hold').length === 2, `guardrail reason stated twice: ${items[1]}`);
   } else if (mode === 'audit-account-status') {
+    // A skipped slot must not put a red 已停用 badge on a healthy credential.
+    await configure({ history: [{ id: 'skip', trigger: 'preheat', occurrence_id: '2026-09-16/p0/acct-browser', account_key: 'acct-browser', masked_identity: 'b***@example.com', started_at: '2026-09-15T21:35:00Z', finished_at: '2026-09-15T21:35:01Z', request_outcome: 'disabled', window_outcome: 'not_observed', decision: 'window_active', latency_ms: 0 }] });
+    await reloadUntil(() => $('#accounts-table .probe-pill'), 'probe cell never rendered');
+    const probe = $('#accounts-table .probe-pill');
+    assert(probe.textContent.trim() === '未发送', `skipped slot shown as ${probe.textContent}`);
+    assert(!probe.classList.contains('bad'), 'a skipped slot is styled as a failure');
+    assert($('#accounts-table .probe-detail').textContent.includes('窗口已在运行'), `skip reason missing: ${$('#accounts-table .probe-detail').textContent}`);
+    await configure({ history: [] });
+    await reloadUntil(() => !$('#accounts-table .probe-pill'), 'history reset did not apply');
     const cells = [...$('#accounts-table tr').children].map((cell) => cell.textContent.trim());
     // account_type is "oauth"; the tier lives in the id_token.
     assert(cells.includes('Team'), `plan column=${JSON.stringify(cells)}`);

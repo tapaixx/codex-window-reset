@@ -118,9 +118,7 @@ func (r *Runtime) executePreheat(ctx context.Context, occurrence domain.PlannedO
 			result.ErrorCode = domain.CodeProbeFailed
 		}
 	}
-	quotaCtx, quotaCancel = context.WithTimeout(ctx, preheatQuotaRefreshTimeout)
-	after, _ := r.refreshSnapshot(quotaCtx, account)
-	quotaCancel()
+	after := r.observeOpenedWindow(ctx, account, before, result)
 
 	record := operationBaseAt(r, trigger, occurrence.ID, account, started)
 	record.RequestOutcome = result.Outcome
@@ -149,6 +147,65 @@ func (r *Runtime) executePreheat(ctx context.Context, occurrence domain.PlannedO
 	}
 	r.appendHistory(record)
 	return record
+}
+
+// windowObservationDelays spaces the retries that wait for upstream usage to
+// catch up with the request that just opened a window.
+var windowObservationDelays = []time.Duration{2 * time.Second, 4 * time.Second}
+
+// observeOpenedWindow reads quota after the request and, when the request
+// succeeded without a window appearing, gives upstream a moment to catch up.
+//
+// Usage is not updated the instant the request returns. Two live preheats
+// opened windows at 05:31:43 and 05:38:27 and both were recorded as
+// WindowUnchanged, because the snapshot taken immediately afterwards still
+// showed the idle placeholder. That reports a preheat that did exactly its job
+// as having failed to open anything.
+//
+// Retries only happen on that specific false-negative path, so a preheat whose
+// window is already visible costs nothing extra.
+func (r *Runtime) observeOpenedWindow(ctx context.Context, account accounts.Account, before *domain.UsageSnapshot, result domain.ProbeResult) *domain.UsageSnapshot {
+	refresh := func() (*domain.UsageSnapshot, error) {
+		quotaCtx, cancel := context.WithTimeout(ctx, preheatQuotaRefreshTimeout)
+		snapshot, err := r.refreshSnapshot(quotaCtx, account)
+		cancel()
+		return snapshot, err
+	}
+	after, err := refresh()
+	// Waiting only helps when the read worked and simply has not caught up. A
+	// refresh that is failing or timing out will not improve by being repeated,
+	// and the preheat must not be held up for it.
+	if err != nil || after == nil || result.Outcome != domain.RequestSucceeded ||
+		windowIsOpen(after) || windowIsOpen(before) {
+		return after
+	}
+	for _, delay := range windowObservationDelays {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return after
+		case <-timer.C:
+		}
+		latest, latestErr := refresh()
+		if latestErr != nil || latest == nil {
+			return after
+		}
+		after = latest
+		if windowIsOpen(after) {
+			return after
+		}
+	}
+	return after
+}
+
+// windowIsOpen reports whether the snapshot's shortest window is running.
+func windowIsOpen(snapshot *domain.UsageSnapshot) bool {
+	window, ok := shortestWindow(snapshot)
+	if !ok {
+		return false
+	}
+	return shortActive(snapshot, window)
 }
 
 func isScheduled(config domain.Config, key string) bool {
