@@ -18,11 +18,32 @@ const HOST_MANAGEMENT_BASE = '/v0/management';
 
 let requestDispatcher = null;
 
+const MANAGER_STORAGE_NAMESPACE = 'cli-proxy-api-webui::secure-storage';
+const MANAGER_ENVELOPE = /^enc::(v\d+)::/u;
+
+// The host manager obfuscates what it puts in localStorage and stamps the
+// scheme into the value. Each version derives its key differently, so a value
+// written by a scheme this panel does not know cannot be read at all — and must
+// never be forwarded as if it were the key itself.
+function managerObfuscationKey(version) {
+  const host = globalThis.location?.host || '';
+  const agent = globalThis.navigator?.userAgent || '';
+  if (version === 'v2') return host ? `${MANAGER_STORAGE_NAMESPACE}|v2|${host}` : `${MANAGER_STORAGE_NAMESPACE}|v2`;
+  return host || agent ? `${MANAGER_STORAGE_NAMESPACE}|${host}|${agent}` : MANAGER_STORAGE_NAMESPACE;
+}
+
+export function managerEnvelopeVersion(value) {
+  const match = typeof value === 'string' ? MANAGER_ENVELOPE.exec(value) : null;
+  return match ? match[1] : '';
+}
+
 function decodeManagerStorage(value) {
-  if (!value || !value.startsWith('enc::v1::')) return value;
+  const version = managerEnvelopeVersion(value);
+  if (!version) return value;
+  if (version !== 'v1' && version !== 'v2') return '';
   try {
     const encoded = atob(value.slice(9));
-    const key = new TextEncoder().encode(`cli-proxy-api-webui::secure-storage|${location.host}|${navigator.userAgent}`);
+    const key = new TextEncoder().encode(managerObfuscationKey(version));
     const decoded = new Uint8Array(encoded.length);
     for (let index = 0; index < encoded.length; index += 1) decoded[index] = encoded.charCodeAt(index) ^ key[index % key.length];
     return new TextDecoder().decode(decoded);
@@ -34,9 +55,26 @@ function extractManagementKey(value) {
   for (let depth = 0; depth < 3 && typeof current === 'string'; depth += 1) {
     try { current = JSON.parse(current); } catch { break; }
   }
-  if (typeof current === 'string') return current;
+  // An undecoded envelope is not a credential. Forwarding one produced
+  // "Authorization: Bearer enc::v2::..." and a 401 that looked like the
+  // Operator's key had changed when it had not.
+  if (typeof current === 'string') return managerEnvelopeVersion(current) ? '' : current;
   if (!current || typeof current !== 'object') return '';
   return current.managementKey || current.state?.managementKey || (typeof current.value === 'string' ? current.value : '');
+}
+
+// managementKeyProblem names why no key could be read, so a 401 can say
+// something the Operator can act on instead of blaming their key.
+export function managementKeyProblem() {
+  let envelope = '';
+  for (const name of ['cli-proxy-auth', 'managementKey']) {
+    const raw = globalThis.localStorage?.getItem?.(name) || '';
+    if (!raw) continue;
+    if (extractManagementKey(raw)) return '';
+    const version = managerEnvelopeVersion(raw);
+    if (version) envelope = version;
+  }
+  return envelope ? `unsupported_storage_${envelope}` : '';
 }
 
 export function managementKey() {
@@ -313,7 +351,12 @@ export function normalizeHostAuthFiles(payload) {
 }
 
 export function requestErrorMessage(error) {
-  if (error?.status === 401 || error?.status === 403) return ERROR_MESSAGES[error.status === 401 ? 'unauthorized' : 'forbidden'];
+  if (error?.status === 401 || error?.status === 403) {
+    // Blaming the key is wrong when the key is there and simply cannot be read.
+    const problem = managementKeyProblem();
+    if (problem) return `宿主管理面板的密钥存储格式（${problem.replace('unsupported_storage_', '')}）本插件无法读取，请升级插件。`;
+    return ERROR_MESSAGES[error.status === 401 ? 'unauthorized' : 'forbidden'];
+  }
   // Preserve the server's actionable validation detail.  The previous
   // implementation replaced every config_invalid response with a generic
   // message, making it impossible to tell which field failed validation.
