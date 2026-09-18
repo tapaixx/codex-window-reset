@@ -1,5 +1,9 @@
 name: Release
 
+# Verification lives in CI, which runs against this same commit on the same
+# push. Repeating it here ran the suite four times per release for no extra
+# signal. This workflow builds, packages, checks the artifacts it produced, and
+# publishes.
 on:
   push:
     tags:
@@ -9,43 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  verify-supported-architectures:
-    name: Native ${{ matrix.architecture }} verification
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: amd64
-            runner: ubuntu-24.04
-            goarch: amd64
-          - architecture: arm64
-            runner: ubuntu-24.04-arm
-            goarch: arm64
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Set up Go 1.24
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.24.x
-          check-latest: true
-          cache: false
-
-      - name: Run format, static, and test checks
-        run: |
-          find . -name '*.go' -not -path './.git/*' -print0 | xargs -0 gofmt -w
-          go vet ./...
-          go test -count=1 ./...
-          go test -count=1 -race ./...
-
-      - name: Build native shared library
-        run: CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -buildmode=c-shared -o "/tmp/codex-window-reset-${{ matrix.architecture }}.so" .
-
   release:
-    needs: verify-supported-architectures
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -61,11 +29,6 @@ jobs:
           check-latest: true
           cache: false
 
-      - name: Set up Node LTS
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
       - name: Resolve semantic version from tag
         id: version
         shell: bash
@@ -75,38 +38,6 @@ jobs:
             *) printf 'release workflow requires a v-prefixed tag\n' >&2; exit 1 ;;
           esac
           printf 'version=%s\n' "${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Run Go tests
-        run: go test ./...
-
-      - name: Run Go race tests
-        run: go test -race ./...
-
-      - name: Run Go vet
-        run: go vet ./...
-
-      - name: Install Chromium for browser acceptance tests
-        run: |
-          # The runner image already ships a Chromium-family browser. Installing
-          # the distro package pulls in the snap transitional package, which can
-          # hang indefinitely rather than fail, and the retry loop below only
-          # reacts to failures. Prefer what is present, and bound every attempt.
-          if command -v chromium || command -v chromium-browser || command -v google-chrome; then
-            exit 0
-          fi
-          export DEBIAN_FRONTEND=noninteractive
-          for attempt in 1 2 3; do
-            if timeout 240 sudo -E apt-get update && timeout 300 sudo -E apt-get install --no-install-recommends -y chromium; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-
-      - name: Run Node tests
-        run: BROWSER_BIN="$(command -v chromium || command -v chromium-browser || command -v google-chrome)" bash scripts/verify-panel.sh
 
       - name: Install release toolchain
         run: |
