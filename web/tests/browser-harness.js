@@ -206,6 +206,43 @@ async function checkUIAudit(mode) {
     }
     assert(items[1].includes('Guardrail Hold'), `guardrail skip not named: ${items[1]}`);
     assert(items[1].split('Guardrail Hold').length === 2, `guardrail reason stated twice: ${items[1]}`);
+  } else if (mode === 'audit-identity-mask') {
+    const soon = new Date(Date.now() + 3600000).toISOString();
+    await configure({
+      history: [{ id: 'h', trigger: 'preheat', occurrence_id: '2026-09-16/p0/acct-browser', account_key: 'acct-browser', masked_identity: 'b***@example.com', started_at: '2026-09-16T01:00:00Z', finished_at: '2026-09-16T01:00:01Z', request_outcome: 'succeeded', window_outcome: 'verified_started', decision: 'proceed', http_status: 200, latency_ms: 900 }],
+      upcoming: { enabled: true, next_run_at: soon, batches: [{ local_date: '2026-09-16', period_index: 0, occurrences: [{ account_key: 'acct-browser', planned_at: soon }] }] },
+    });
+    await reloadUntil(() => $('#history-output summary') && $('#upcoming-output summary'), 'panels not rendered');
+    const openAll = () => $$('#history-output details, #upcoming-output details').forEach((node) => { node.open = true; });
+    const shown = () => {
+      openAll();
+      return {
+        table: $('.account-name strong')?.textContent || '',
+        ids: $('.account-ids')?.textContent || '',
+        upcoming: $('#upcoming-output .upcoming-item span')?.textContent || '',
+        // Upcoming rows also carry .history-batch-item, and that panel sits
+        // first in the DOM, so this must be scoped or it reads the wrong one.
+        history: ($('#history-output .history-batch-item')?.textContent || '').split(' · ')[0],
+      };
+    };
+    // The fixture credential is browser@example.com; masked it must be b***@…
+    const masked = shown();
+    for (const [where, value] of Object.entries(masked)) {
+      assert(!value.includes('browser@'), `${where} shows the address while masked: ${value}`);
+    }
+    assert(masked.history.includes('***'), `history is not masked: ${masked.history}`);
+    assert(masked.upcoming.includes('***'), `upcoming is not masked: ${masked.upcoming}`);
+    // The identifier line must not give back the address either.
+    assert(!/browser/u.test(masked.ids), `account identifiers leak the local part: ${masked.ids}`);
+
+    $('[data-action="toggle-identities"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const revealed = shown();
+    // Every panel answers the same way, including history, which used to keep
+    // its own fixed masking regardless of the toggle.
+    for (const where of ['table', 'upcoming', 'history']) {
+      assert(revealed[where].includes('browser@example.com'), `${where} still masked after showing identities: ${revealed[where]}`);
+    }
   } else if (mode === 'audit-account-status') {
     // A skipped slot must not put a red 已停用 badge on a healthy credential.
     await configure({ history: [{ id: 'skip', trigger: 'preheat', occurrence_id: '2026-09-16/p0/acct-browser', account_key: 'acct-browser', masked_identity: 'b***@example.com', started_at: '2026-09-15T21:35:00Z', finished_at: '2026-09-15T21:35:01Z', request_outcome: 'disabled', window_outcome: 'not_observed', decision: 'window_active', latency_ms: 0 }] });

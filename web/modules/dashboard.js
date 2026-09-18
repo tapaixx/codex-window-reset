@@ -58,16 +58,31 @@ function shortWindow(quota) {
   return (quota?.snapshot?.windows || []).find((window) => window?.short) || (quota?.snapshot?.windows || [])[0] || {};
 }
 
+function maskAddress(value) {
+  const at = value.indexOf('@');
+  return at > 0 ? `${value[0]}***${value.slice(at)}` : '***';
+}
+
+// An account identifier is masked head-and-tail so it stays useful for
+// cross-referencing during triage. That only holds while it really is an
+// opaque token: an address masked the same way exposed its local part and its
+// domain, and beside the masked address in the same cell it reconstructed the
+// whole thing. Anything carrying an address is masked as one instead.
+function maskOpaqueIdentifier(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  if (text.includes('@')) return maskAddress(text);
+  // Below this length a head and a tail give back most of the value, so
+  // short identifiers are masked outright rather than almost-shown.
+  return text.length >= 16 ? `${text.slice(0, 4)}***${text.slice(-4)}` : '***';
+}
+
 export function maskOperationalIdentity(identity = {}) {
-  const email = String(identity.email || '');
-  const at = email.indexOf('@');
-  const maskedEmail = at > 0 ? `${email[0]}***${email.slice(at)}` : '***';
   const authIndex = String(identity.authIndex || '');
-  const prefix = String(identity.accountPrefix || '');
   return {
-    email: maskedEmail,
+    email: maskAddress(String(identity.email || '')),
     authIndex: authIndex ? '*'.repeat(Math.min(2, authIndex.length)) : '',
-    accountPrefix: prefix.length > 4 ? `${prefix.slice(0, Math.min(5, prefix.length - 4))}***${prefix.slice(-4)}` : '***',
+    accountPrefix: maskOpaqueIdentifier(identity.accountPrefix),
   };
 }
 

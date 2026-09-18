@@ -52,7 +52,14 @@ test('operations summary separates scheduled, paused, guardrail, and stale count
 });
 
 test('identity hiding is session-only and consistently masks all operational identifiers', () => {
+  // A short identifier is masked outright: revealing a head and a tail of one
+  // gives back most of it, which is how "alex_***.com" beside "a***@qq.com"
+  // reassembled a whole address.
   assert.deepEqual(maskOperationalIdentity({ email: 'alice@example.com', authIndex: '17', accountPrefix: 'acct_abcdef' }), {
-    email: 'a***@example.com', authIndex: '**', accountPrefix: 'acct_***cdef',
+    email: 'a***@example.com', authIndex: '**', accountPrefix: '***',
+  });
+  // A long opaque identifier keeps enough to cross-reference during triage.
+  assert.deepEqual(maskOperationalIdentity({ email: 'alice@example.com', authIndex: '17', accountPrefix: '541773e7-d581-469c-87fe-eabbca968d01' }), {
+    email: 'a***@example.com', authIndex: '**', accountPrefix: '5417***8d01',
   });
 });

@@ -37,7 +37,7 @@ func (*fakeHost) Log(context.Context, string, string, map[string]any) {}
 
 func TestAccountProjectionExposesAuthenticatedOperationalMetadataButNeverToken(t *testing.T) {
 	raw := json.RawMessage(`{"access_token":"secret","account_id":"acct-upstream"}`)
-	view, err := Project(AuthFile{AuthIndex: "7", Email: "alice@example.com", Account: "acct-upstream", Provider: "codex", UpdatedAt: "2026-09-11T01:02:03Z"}, raw)
+	view, err := Project(AuthFile{AuthIndex: "7", Email: "alice@example.com", AccountID: "acct-upstream", Provider: "codex", UpdatedAt: "2026-09-11T01:02:03Z"}, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,5 +213,49 @@ func TestAccountAndErrorJSONNeverExposeIdentityOrCredentialFixtures(t *testing.T
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("JSON contains forbidden %q: %s", forbidden, joined)
 		}
+	}
+}
+
+// The host's account and id fields carry the operator's address — account is
+// the address itself and id embeds it in a filename. Feeding either into the
+// account prefix put an address into a field the panel masks as an opaque
+// token, and the prefix mask reveals a head and a tail: "alex_***.com" beside
+// a masked "a***@qq.com" reconstructs the whole address.
+func TestAccountPrefixNeverCarriesTheOperatorAddress(t *testing.T) {
+	raw := json.RawMessage(`{"access_token":"secret"}`)
+	file := AuthFile{
+		AuthIndex: "7",
+		Email:     "alex_nnn@qq.com",
+		Account:   "alex_nnn@qq.com",
+		ID:        "codex-03c103fb-alex_nnn@qq.com-team.json",
+		Provider:  "codex",
+	}
+	view, err := Project(file, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.AccountPrefix != "" {
+		t.Fatalf("account prefix = %q, want empty when no account identifier is available", view.AccountPrefix)
+	}
+	encoded, _ := json.Marshal(view)
+	for _, leak := range []string{"alex_nnn", "qq.com", "alex_"} {
+		if bytes.Contains(encoded, []byte(`"account_prefix"`)) && bytes.Contains(encoded, []byte(leak)) {
+			// The email itself is a declared field; only the prefix must be clean.
+			if bytes.Contains([]byte(view.AccountPrefix), []byte(leak)) {
+				t.Fatalf("account prefix leaked %q: %s", leak, encoded)
+			}
+		}
+	}
+}
+
+func TestAccountPrefixUsesTheIDTokenAccountIdentifier(t *testing.T) {
+	raw := json.RawMessage(`{"access_token":"secret"}`)
+	file := AuthFile{AuthIndex: "7", Email: "alex_nnn@qq.com", Account: "alex_nnn@qq.com", AccountID: "541773e7-d581-469c-87fe-eabbca968d01", Provider: "codex"}
+	view, err := Project(file, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.AccountPrefix != "541773e7-d581-46" {
+		t.Fatalf("account prefix = %q, want the truncated account identifier", view.AccountPrefix)
 	}
 }

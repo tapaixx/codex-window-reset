@@ -333,7 +333,11 @@ export function normalizeHostAuthFiles(payload) {
   return (files || []).filter((file) => String(file?.provider || file?.type || file?.credential_type || '').toLowerCase() === 'codex')
     .map((file) => {
       const authIndex = String(file?.auth_index || file?.authIndex || file?.index || '').trim();
-      const accountID = String(file?.account_id || file?.accountId || file?.account || file?.id || '').trim();
+      // account and id are not substitutes for an account identifier: account
+      // is the operator's address and id embeds it in a filename. Using either
+      // put an address into a field the panel masks as an opaque token.
+      const token = file?.id_token || file?.idToken || {};
+      const accountID = String(file?.account_id || file?.accountId || token?.chatgpt_account_id || token?.chatgptAccountId || '').trim();
       return {
         account_key: `acct-${authIndex}`,
         auth_index: authIndex,

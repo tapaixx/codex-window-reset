@@ -43,6 +43,7 @@ type AuthFile struct {
 	AccountType    string `json:"account_type,omitempty"`
 	Account        string `json:"account,omitempty"`
 	Plan           string `json:"-"`
+	AccountID      string `json:"account_id,omitempty"`
 	PlanType       string `json:"plan_type,omitempty"`
 	PlanLabel      string `json:"plan_label,omitempty"`
 	UpdatedAt      string `json:"updated_at,omitempty"`
@@ -73,6 +74,7 @@ func (f *AuthFile) UnmarshalJSON(data []byte) error {
 		AccountType:    firstString(object, "account_type", "accountType", "AccountType"),
 		Account:        firstString(object, "account", "Account"),
 		Plan:           firstString(object, "plan", "Plan"),
+		AccountID:      firstNonEmpty(firstString(object, "account_id", "accountId", "AccountID"), nestedChatGPTAccountID(object)),
 		PlanType:       nestedPlanType(object),
 		PlanLabel:      firstString(object, "plan_label", "planLabel", "PlanLabel", "plan"),
 		UpdatedAt:      firstString(object, "updated_at", "updatedAt", "UpdatedAt", "modified_at", "modifiedAt", "ModifiedAt"),
@@ -80,6 +82,36 @@ func (f *AuthFile) UnmarshalJSON(data []byte) error {
 		Unavailable:    firstBool(object, "unavailable", "Unavailable"),
 	}
 	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// nestedChatGPTAccountID reads the account identifier out of the OAuth
+// id_token. The host's sibling account and id fields are not substitutes: both
+// carry the operator's email address, so using them as an account identifier
+// puts an address into a field the panel masks as an opaque token.
+func nestedChatGPTAccountID(object map[string]json.RawMessage) string {
+	for _, key := range []string{"id_token", "idToken", "IDToken"} {
+		raw, ok := object[key]
+		if !ok {
+			continue
+		}
+		var token map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &token); err != nil {
+			continue
+		}
+		if value := firstString(token, "chatgpt_account_id", "chatgptAccountId", "account_id"); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // nestedPlanType reads the subscription tier out of the OAuth id_token, which

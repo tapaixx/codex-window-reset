@@ -142,16 +142,22 @@ func Project(file AuthFile, raw json.RawMessage) (Account, error) {
 	}, nil
 }
 
+// accountPrefix returns an opaque account identifier and nothing else.
+//
+// Account and ID are deliberately absent. Both carry the operator's email —
+// Account is the address itself and ID embeds it in a filename — so using them
+// here put an address into a field the panel masks as an opaque token. The
+// prefix mask reveals a head and a tail, which together with the masked email
+// beside it reconstructed the address and defeated the masking entirely.
 func accountPrefix(file AuthFile) string {
-	for _, value := range []string{file.Account, file.ID} {
-		if value = strings.TrimSpace(value); value != "" {
-			if len(value) > 16 {
-				return value[:16]
-			}
-			return value
-		}
+	value := strings.TrimSpace(file.AccountID)
+	if value == "" {
+		return ""
 	}
-	return ""
+	if len(value) > 16 {
+		return value[:16]
+	}
+	return value
 }
 
 // AuthMaterial is the sole credential extraction point.  Callers should

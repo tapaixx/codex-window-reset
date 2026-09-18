@@ -124,6 +124,14 @@ function bootPanel() {
     return wrap;
   }
 
+  // One masking decision for the whole panel: every identity goes through the
+  // account list and the current toggle, whatever renders it.
+  function identityFor(accountKey, fallback = '') {
+    const account = state.accounts.find((item) => item.account_key === accountKey);
+    if (!account) return fallback || accountKey || '***';
+    return projectAccountRow(account, { quota: {}, history: [], hidden: state.hidden }).email;
+  }
+
   function renderUpcoming() {
     const body = $('#upcoming-output'); if (!body) return;
     const note = $('#upcoming-note');
@@ -359,7 +367,10 @@ function bootPanel() {
       records.forEach((record) => {
         const item = document.createElement('div'); item.className = 'history-batch-item';
         const detail = describeOperation(record, { probeOutcomes: probeOutcomeLabels, windowOutcomes: windowOutcomeLabels, decisions: decisionLabels });
-        const head = [record.masked_identity || record.account_key, formatDate(record.started_at), triggerLabels[record.trigger] || record.trigger];
+        // History used the server's fixed masked identity and ignored the
+        // toggle, so turning identities on left this panel masked while every
+        // other one showed the real address — two different answers on one page.
+        const head = [identityFor(record.account_key, record.masked_identity), formatDate(record.started_at), triggerLabels[record.trigger] || record.trigger];
         // Latency is only meaningful for a request that was actually sent.
         const tail = record.latency_ms ? [formatDuration(record.latency_ms)] : [];
         item.textContent = [...head, ...detail, ...tail].join(' · ');
@@ -508,7 +519,7 @@ function bootPanel() {
   $('[data-action="select-all"]').addEventListener('click', () => { state.selected = new Set(state.accounts.filter((account) => !account.disabled).map((account) => account.account_key)); renderAccounts(); });
   $('[data-action="select-none"]').addEventListener('click', () => { state.selected.clear(); renderAccounts(); });
   $('#select-all-checkbox').addEventListener('change', (event) => { state.selected = event.target.checked ? new Set(state.accounts.filter((account) => !account.disabled).map((account) => account.account_key)) : new Set(); renderAccounts(); });
-  $('[data-action="toggle-identities"]').addEventListener('click', (event) => { state.hidden = !state.hidden; event.currentTarget.querySelector('span').textContent = state.hidden ? '显示身份' : '隐藏身份'; renderAccounts(); });
+  $('[data-action="toggle-identities"]').addEventListener('click', (event) => { state.hidden = !state.hidden; event.currentTarget.querySelector('span').textContent = state.hidden ? '显示身份' : '隐藏身份'; renderAccounts(); renderHistory(); });
   $('[data-action="refresh-quota"]').addEventListener('click', (event) => refreshQuota([...state.selected], event.currentTarget));
   $('[data-action="refresh-all-quota"]').addEventListener('click', (event) => refreshAllQuota(event.currentTarget));
   $('[data-action="run-probe"]').addEventListener('click', openProbe);
