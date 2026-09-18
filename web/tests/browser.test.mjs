@@ -24,7 +24,12 @@ const browserCandidates = [
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
 ];
-const browserStartupTimeoutMs = 20_000;
+// The first launch on a cold CI runner has twice measured just over twenty
+// seconds and failed the whole suite with "DevTools endpoint did not start",
+// while the same commit passed elsewhere. The wait polls every 50ms and returns
+// the moment the endpoint answers, so a longer ceiling costs nothing when the
+// browser starts quickly and stops the suite crying wolf when it does not.
+const browserStartupTimeoutMs = 60_000;
 const hostBrowser = await resolveBrowserExecutable(process.env.BROWSER_BIN || '', browserCandidates);
 const dockerBrowserImage = process.env.BROWSER_DOCKER_IMAGE || '';
 const browserRunner = hostBrowser || dockerBrowserImage ? 'available' : '';
