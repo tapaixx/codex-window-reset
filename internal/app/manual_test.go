@@ -72,6 +72,38 @@ func TestSimulationDoesNotBlockOnAccountRediscovery(t *testing.T) {
 	}
 }
 
+func TestUpdateScheduleRetiresPreviouslyScheduledAccountThatDisappeared(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"}, accounts.Account{Key: "missing"})
+	defer fx.runtime.Stop()
+
+	fx.accounts.Remove("missing")
+	draft := fx.runtime.Schedule()
+	updated, err := fx.runtime.UpdateSchedule(context.Background(), draft)
+	if err != nil {
+		t.Fatalf("stale scheduled account blocked schedule update: %v", err)
+	}
+	if got := updated.ScheduledAccountKeys; !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("scheduled accounts = %#v, want only discovered account", got)
+	}
+	if got := fx.runtime.Schedule().ScheduledAccountKeys; !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("runtime retained stale scheduled account: %#v", got)
+	}
+}
+
+func TestUpdateScheduleStillRejectsNewUnknownScheduledAccount(t *testing.T) {
+	fx := newTask7Fixture(t, accounts.Account{Key: "a"})
+	defer fx.runtime.Stop()
+
+	draft := fx.runtime.Schedule()
+	draft.ScheduledAccountKeys = append(draft.ScheduledAccountKeys, "new-unknown")
+	if _, err := fx.runtime.UpdateSchedule(context.Background(), draft); domain.CodeOf(err) != domain.CodeConfigInvalid {
+		t.Fatalf("new unknown scheduled account error = %v, want %q", err, domain.CodeConfigInvalid)
+	}
+	if got := fx.runtime.Schedule().ScheduledAccountKeys; !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("rejected update changed the live schedule: %#v", got)
+	}
+}
+
 func (s *task7AccountService) Find(_ context.Context, key string) (accounts.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

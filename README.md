@@ -132,6 +132,10 @@ Short Window, but it never consumes a Reset Credit.
 保存，才会为该账户生成计划。手动刷新和健康检测仍需在操作时
 明确选择账户。模拟器即使没有账户也可以预览策略和时间轴。
 
+如果之前计划的账户已从 CLIProxyAPI 中删除，保存后续计划时会自动清理这个
+陈旧的计划成员，不会阻塞其他账户的维护；新加入但当前未发现的账户 key
+仍会被拒绝，避免把输入错误保存成无效计划。
+
 ## 操作说明 / Safe operator actions
 
 ### 健康检测 / Health Probe

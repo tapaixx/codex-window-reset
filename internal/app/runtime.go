@@ -411,6 +411,14 @@ func (r *Runtime) UpdateSchedule(ctx context.Context, draft domain.Config) (doma
 	if err != nil {
 		return domain.Config{}, err
 	}
+	// A scheduled account may disappear from the host between two panel
+	// loads. It is safe to retire that old membership while saving a newer
+	// schedule, but a newly supplied unknown key must still be rejected below.
+	draft.ScheduledAccountKeys = removeMissingPreviousScheduledAccounts(
+		draft.ScheduledAccountKeys,
+		current.ScheduledAccountKeys,
+		known,
+	)
 	if draft.SchemaVersion == 0 {
 		draft.SchemaVersion = current.SchemaVersion
 		if draft.SchemaVersion == 0 {
@@ -451,6 +459,27 @@ func (r *Runtime) discoveredAccountKeys(ctx context.Context) (map[string]struct{
 		}
 	}
 	return known, nil
+}
+
+func removeMissingPreviousScheduledAccounts(draft, previous []string, known map[string]struct{}) []string {
+	previousSet := make(map[string]struct{}, len(previous))
+	for _, key := range previous {
+		if normalized := normalizeKey(key); normalized != "" {
+			previousSet[normalized] = struct{}{}
+		}
+	}
+
+	filtered := make([]string, 0, len(draft))
+	for _, key := range draft {
+		normalized := normalizeKey(key)
+		if _, discovered := known[normalized]; !discovered {
+			if _, wasScheduled := previousSet[normalized]; wasScheduled {
+				continue
+			}
+		}
+		filtered = append(filtered, key)
+	}
+	return filtered
 }
 
 // Simulate validates a draft against the currently discovered accounts and
